@@ -439,8 +439,9 @@ export default function (pi: ExtensionAPI) {
 				"  - AGENTS.md enforces workflow rules",
 				"",
 				"Commands:",
-				"  /sandbox:sync    - Pull updates from original",
-				"  /sandbox:status  - Show this message",
+				"  /sandbox:enter <path> - Enter/resume a sandbox",
+				"  /sandbox:sync         - Pull updates from original",
+				"  /sandbox:status       - Show this message",
 			];
 
 			ctx.ui.notify(lines.join("\n"), "info");
@@ -481,6 +482,117 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify("Sandbox state cleared. Files remain on disk.", "info");
+		},
+	});
+
+	// Command: /sandbox:enter <path>
+	pi.registerCommand("sandbox:enter", {
+		description: "Enter an existing sandbox by path",
+		getArgumentCompletions: (prefix: string) => {
+			// Discover existing sandboxes in ~/src/sandbox/
+			const sandboxBase = getSandboxBase();
+			if (!existsSync(sandboxBase)) {
+				return null;
+			}
+
+			try {
+				const { readdirSync } = require("node:fs");
+				const { join } = require("node:path");
+				const sandboxes = readdirSync(sandboxBase, { withFileTypes: true })
+					.filter(d => d.isDirectory())
+					.map(d => join(sandboxBase, d.name));
+
+				const items = sandboxes.map(s => ({ value: s, label: s.replace(homedir(), "~") }));
+				const filtered = prefix
+					? items.filter(i => i.value.startsWith(normalizePath(prefix)))
+					: items;
+
+				return filtered.length > 0 ? filtered : null;
+			} catch {
+				return null;
+			}
+		},
+		handler: async (args, ctx) => {
+			if (!args || args.trim() === "") {
+				ctx.ui.notify("Usage: /sandbox:enter <sandbox-path>\nExample: /sandbox:enter ~/src/sandbox/my-repo", "error");
+				return;
+			}
+
+			const sandboxPath = normalizePath(args.trim());
+
+			// Validate sandbox exists
+			if (!existsSync(sandboxPath)) {
+				ctx.ui.notify(`Sandbox path does not exist: ${sandboxPath}`, "error");
+				return;
+			}
+
+			// Validate it looks like a sandbox (has AGENTS.md)
+			const agentsPath = join(sandboxPath, "AGENTS.md");
+			if (!existsSync(agentsPath)) {
+				ctx.ui.notify(
+					`Not a valid sandbox: ${sandboxPath}\n\n` +
+					`A sandbox must have an AGENTS.md file.\n` +
+					`Create one with /sandbox:create or add AGENTS.md manually.`,
+					"error"
+				);
+				return;
+			}
+
+			// Try to find the original path from AGENTS.md
+			let originalPath: string | undefined;
+			try {
+				const agentsContent = readFileSync(agentsPath, "utf-8");
+				const pathMatch = agentsContent.match(/\*\*Sandbox Path\*\*: `([^`]+)`/);
+				if (pathMatch) {
+					originalPath = pathMatch[1];
+				}
+			} catch {
+				// Ignore - original path is optional
+			}
+
+			// Confirm with user
+			if (!ctx.hasUI) {
+				ctx.ui.notify("Sandbox enter requires interactive mode for confirmation", "error");
+				return;
+			}
+
+			const confirmed = await ctx.ui.confirm(
+				"Enter Sandbox",
+				`Activate sandbox at:\n  ${sandboxPath}\n\n` +
+				`This will enable:\n` +
+				`  - Path protection (writes blocked outside sandbox)\n` +
+				`  - Dangerous command guards\n` +
+				`  - Todo tracking via /todo:* commands`
+			);
+
+			if (!confirmed) {
+				ctx.ui.notify("Sandbox enter cancelled", "info");
+				return;
+			}
+
+			// Update state
+			sandboxState = {
+				sandboxPath,
+				originalPath,
+				initialized: true,
+			};
+
+			// Persist state
+			pi.appendEntry(STATE_KEY, sandboxState);
+
+			// Update UI
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", `🔒 Sandbox: ${sandboxPath}`));
+			}
+
+			ctx.ui.notify(
+				`Entered sandbox successfully!\n\n` +
+				`  Sandbox: ${sandboxPath}\n` +
+				`  AGENTS.md: ${agentsPath}\n\n` +
+				`All write/edit operations are now restricted to the sandbox directory.\n` +
+				`Use /todo:list to see your tasks, /sandbox:sync to pull updates.`,
+				"success"
+			);
 		},
 	});
 
