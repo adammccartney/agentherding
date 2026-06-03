@@ -59,7 +59,7 @@ function createAgentsMd(sandboxPath: string): string {
 
 - **Sandbox Path**: \`${sandboxPath}\`
 - **Created**: ${new Date().toISOString()}
-- **Git Status**: This is a **non-git working copy** (no .git directory)
+- **Git Status**: This is an **independent git repository** (copied from original at creation)
 
 ## Task Tracking
 
@@ -98,14 +98,18 @@ Use \`TASK:\` and \`TASK_DONE:\` markers to track exploration:
 
 ## About This Sandbox
 
-This sandbox is a **git-free working copy** of the original repository. The \`.git\` directory is intentionally excluded because:
+This sandbox is an **independent copy** of the original repository, including its \`.git\` directory. Key characteristics:
 
-- This is a disposable experimentation space, not a fork
-- Git state (branches, commits, index) is managed in the original repository
-- Submodules are copied as working files without git initialization
-- Syncing is simpler without git state conflicts
+- **Independent git history**: The \`.git\` directory is copied from the original at creation time
+- **No git sync**: The \`/sandbox:sync\` command excludes \`.git\`, so git history is NOT updated during sync
+- **Disposable experimentation space**: You can commit in the sandbox, but this is for local tracking only
+- **Manual adoption**: When you adopt changes, copy them manually back to the original repository and commit there
 
-When you adopt changes, copy them manually back to the original repository and commit there.
+This design gives you:
+- Full git functionality within the sandbox for tracking your experiments
+- Clean separation from the original repo's git state
+- No risk of accidental pushes or branch conflicts with the original
+- Simpler syncing without git merge conflicts
 
 The \`TASK\`/\`TASK_DONE\` convention helps you track what ideas were explored in this sandbox. Review \`TASK_DONE\` sections when deciding what to adopt.
 `;
