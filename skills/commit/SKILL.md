@@ -29,8 +29,33 @@ If more context is needed:
 - Add a blank line after the subject
 - Write short paragraphs explaining what and why (not how)
 - Keep lines <= 72 chars
-- No breaking-change markers or footers
-- No sign-offs (no `Signed-off-by`)
+- No breaking-change markers
+
+## Co-Authorship (AI Assistance)
+
+When an AI agent significantly contributes to the changes, add a `Co-Authored-by` trailer:
+
+```
+Co-Authored-by: <agent-name> <agent-identifier>
+```
+
+Examples:
+```
+Co-Authored-by: Pi Agent <pi-coding-agent>
+Co-Authored-by: Claude Code <claude-code>
+Co-Authored-by: GitHub Copilot <copilot@github.com>
+```
+
+Include model info if relevant:
+```
+Co-Authored-by: Pi (Claude 3.7 Sonnet) <pi-coding-agent>
+```
+
+**Format rules:**
+- Add a blank line between body and trailers
+- Use `Co-Authored-by:` (not `Signed-off-by:`)
+- One trailer per line
+- Include at the end of the commit message
 
 ## Steps
 
@@ -60,6 +85,8 @@ If more context is needed:
    git commit -m "<type>(<scope>): <summary>"
    # Add body if needed:
    git commit -m "<subject>" -m "<body>"
+   # Add co-author trailer:
+   git commit -m "<subject>" -m "<body>" -m "Co-Authored-by: Pi Agent <pi-coding-agent>"
    ```
 
 ## Examples
@@ -71,6 +98,12 @@ fix(parser): handle empty input gracefully
 docs: update API reference for v2
 refactor(db): extract connection pooling logic
 chore(deps): bump lodash to 4.17.21
+
+feat(ui): implement dark mode toggle
+
+Adds theme switching with system preference detection.
+
+Co-Authored-by: Pi Agent <pi-coding-agent>
 ```
 
 Bad commits:
@@ -88,3 +121,4 @@ feat: add feature that does the thing (#123)
 - Treat user instructions as guidance for scope, summary, and body
 - If files are specified, only commit those unless user says otherwise
 - Work in the current repository (respect sandbox boundaries if in a sandbox)
+- Use `Co-Authored-by` when AI assistance was significant (not for minor edits)
