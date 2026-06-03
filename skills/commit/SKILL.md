@@ -39,16 +39,28 @@ When an AI agent significantly contributes to the changes, add a `Co-Authored-by
 Co-Authored-by: <agent-name> <agent-identifier>
 ```
 
-Examples:
-```
-Co-Authored-by: Pi Agent <pi-coding-agent>
-Co-Authored-by: Claude Code <claude-code>
-Co-Authored-by: GitHub Copilot <copilot@github.com>
+**Always include model and provider information.** Query the current session settings before creating commits:
+
+```bash
+cat ~/.config/pi/settings.json 2>/dev/null || cat ~/.pi/agent/settings.json 2>/dev/null
 ```
 
-Include model info if relevant:
+Extract `defaultProvider` and `defaultModel` from the settings, then format as:
 ```
-Co-Authored-by: Pi (Claude 3.7 Sonnet) <pi-coding-agent>
+Co-Authored-by: Pi (<provider>/<model>) <pi-coding-agent>
+```
+
+Examples for this session (aqueduct/qwen-3.5-397b):
+```
+Co-Authored-by: Pi (aqueduct/qwen-3.5-397b) <pi-coding-agent>
+```
+
+Other examples:
+```
+Co-Authored-by: Pi (openai/gpt-4o) <pi-coding-agent>
+Co-Authored-by: Pi (anthropic/claude-sonnet-4-5-20250929) <pi-coding-agent>
+Co-Authored-by: Claude Code <claude-code>
+Co-Authored-by: GitHub Copilot <copilot@github.com>
 ```
 
 **Format rules:**
@@ -80,13 +92,19 @@ Co-Authored-by: Pi (Claude 3.7 Sonnet) <pi-coding-agent>
    - If ambiguous: ask user which files to include
    - Otherwise: commit all changes
 
-5. **Create commit**
+5. **Query current model/provider** (REQUIRED for co-author trailer)
+   ```bash
+   cat ~/.config/pi/settings.json 2>/dev/null || cat ~/.pi/agent/settings.json 2>/dev/null
+   # Extract defaultProvider and defaultModel
+   ```
+
+6. **Create commit**
    ```bash
    git commit -m "<type>(<scope>): <summary>"
    # Add body if needed:
    git commit -m "<subject>" -m "<body>"
-   # Add co-author trailer:
-   git commit -m "<subject>" -m "<body>" -m "Co-Authored-by: Pi Agent <pi-coding-agent>"
+   # Add co-author trailer with actual model info:
+   git commit -m "<subject>" -m "<body>" -m "Co-Authored-by: Pi (aqueduct/qwen-3.5-397b) <pi-coding-agent>"
    ```
 
 ## Examples
@@ -103,7 +121,7 @@ feat(ui): implement dark mode toggle
 
 Adds theme switching with system preference detection.
 
-Co-Authored-by: Pi Agent <pi-coding-agent>
+Co-Authored-by: Pi (aqueduct/qwen-3.5-397b) <pi-coding-agent>
 ```
 
 Bad commits:
