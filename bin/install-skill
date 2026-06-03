@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Install a pi skill globally via symlink
+#
+# Usage: ./bin/install-skill <skill-name>
+#
+# Example:
+#   ./bin/install-skill commit
+#
+# This creates a symlink from ~/.pi/agent/skills/<name>
+# to the skill in this repository, so changes are immediately reflected.
+#
+
+set -euo pipefail
+
+SKILL_NAME="${1:-}"
+
+if [[ -z "$SKILL_NAME" ]]; then
+    echo "Usage: $0 <skill-name>" >&2
+    echo "" >&2
+    echo "Available skills:" >&2
+    for skill in skills/*/; do
+        if [[ -f "$skill/SKILL.md" ]]; then
+            echo "  - $(basename "$skill")" >&2
+        fi
+    done
+    exit 1
+fi
+
+# Remove trailing slash if present
+SKILL_NAME="${SKILL_NAME%/}"
+
+# Get the git repository root
+GIT_ROOT="$(git rev-parse --show-toplevel)"
+
+# Source and target paths
+SRC="$GIT_ROOT/skills/$SKILL_NAME"
+TARGET="$HOME/.pi/agent/skills/$SKILL_NAME"
+
+# Validate source exists
+if [[ ! -d "$SRC" ]]; then
+    echo "Error: Skill '$SKILL_NAME' not found in $SRC" >&2
+    exit 1
+fi
+
+if [[ ! -f "$SRC/SKILL.md" ]]; then
+    echo "Error: Skill '$SKILL_NAME' does not contain SKILL.md" >&2
+    exit 1
+fi
+
+# Ensure target directory exists
+mkdir -p "$HOME/.pi/agent/skills"
+
+# Remove existing target (file, directory, or symlink)
+if [[ -e "$TARGET" || -L "$TARGET" ]]; then
+    rm -rf "$TARGET"
+fi
+
+# Create symlink
+ln -sv "$SRC" "$TARGET"
+
+echo ""
+echo "✓ Skill '$SKILL_NAME' installed to: $TARGET"
+echo "  → Points to: $SRC"
+echo ""
+echo "Reload in pi with: /reload"

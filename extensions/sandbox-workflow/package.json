@@ -1,0 +1,7 @@
+{
+  "name": "sandbox-workflow",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

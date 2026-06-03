@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# List available and installed pi skills
+#
+# Usage: ./bin/list-skills
+#
+
+set -euo pipefail
+
+# Get the git repository root
+GIT_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "Skills in repository ($GIT_ROOT/skills/):"
+echo "=========================================="
+if [[ -d "$GIT_ROOT/skills" ]]; then
+    shopt -s nullglob
+    for skill in "$GIT_ROOT/skills"/*/; do
+        if [[ -f "$skill/SKILL.md" ]]; then
+            echo "  ✓ $(basename "$skill")"
+        fi
+    done
+    shopt -u nullglob
+else
+    echo "  (none)"
+fi
+
+echo ""
+echo "Installed global skills (~/.pi/agent/skills/):"
+echo "=============================================="
+if [[ -d "$HOME/.pi/agent/skills" ]]; then
+    shopt -s nullglob
+    for skill in "$HOME/.pi/agent/skills"/*; do
+        if [[ -L "$skill" ]]; then
+            target="$(readlink "$skill")"
+            name="$(basename "$skill")"
+            if [[ "$target" == "$GIT_ROOT"* ]]; then
+                echo "  → $name (symlink → this repo)"
+            else
+                echo "  → $name (symlink)"
+            fi
+        elif [[ -d "$skill" ]]; then
+            echo "  • $(basename "$skill") (copy)"
+        fi
+    done
+    shopt -u nullglob
+else
+    echo "  (none)"
+fi
+
+echo ""
+echo "Installed local skills (.pi/skills/):"
+echo "====================================="
+if [[ -d ".pi/skills" ]]; then
+    shopt -s nullglob
+    for skill in .pi/skills/*; do
+        if [[ -f "$skill/SKILL.md" ]] || [[ -L "$skill" ]]; then
+            echo "  • $(basename "$skill")"
+        fi
+    done
+    shopt -u nullglob
+else
+    echo "  (none)"
+fi

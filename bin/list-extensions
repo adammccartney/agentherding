@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#
+# List available and installed pi extensions
+#
+# Usage: ./bin/list-extensions
+#
+
+set -euo pipefail
+
+# Get the git repository root
+GIT_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "Extensions in repository ($GIT_ROOT/extensions/):"
+echo "=================================================="
+if [[ -d "$GIT_ROOT/extensions" ]]; then
+    for ext in "$GIT_ROOT/extensions"/*/; do
+        if [[ -f "$ext/index.ts" ]]; then
+            echo "  ✓ $(basename "$ext")"
+        fi
+    done
+else
+    echo "  (none)"
+fi
+
+echo ""
+echo "Installed global extensions (~/.pi/agent/extensions/):"
+echo "======================================================"
+if [[ -d "$HOME/.pi/agent/extensions" ]]; then
+    shopt -s nullglob
+    for ext in "$HOME/.pi/agent/extensions"/*; do
+        if [[ -L "$ext" ]]; then
+            target="$(readlink "$ext")"
+            name="$(basename "$ext")"
+            if [[ "$target" == "$GIT_ROOT"* ]]; then
+                echo "  → $name (symlink → this repo)"
+            else
+                echo "  → $name (symlink)"
+            fi
+        elif [[ -d "$ext" ]]; then
+            echo "  • $(basename "$ext") (copy)"
+        fi
+    done
+    shopt -u nullglob
+else
+    echo "  (none)"
+fi
+
+echo ""
+echo "Installed local extensions (.pi/extensions/):"
+echo "============================================="
+if [[ -d ".pi/extensions" ]]; then
+    for ext in .pi/extensions/*/; do
+        if [[ -f "$ext/index.ts" ]] || [[ -L "$ext" ]]; then
+            echo "  • $(basename "$ext")"
+        fi
+    done
+else
+    echo "  (none)"
+fi

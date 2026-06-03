@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Install a pi extension globally via symlink
+#
+# Usage: ./bin/install-extension <extension-name>
+#
+# Example:
+#   ./bin/install-extension sandbox-workflow
+#
+# This creates a symlink from ~/.pi/agent/extensions/<name>
+# to the extension in this repository, so changes are immediately reflected.
+#
+
+set -euo pipefail
+
+EXT_NAME="${1:-}"
+
+if [[ -z "$EXT_NAME" ]]; then
+    echo "Usage: $0 <extension-name>" >&2
+    echo "" >&2
+    echo "Available extensions:" >&2
+    for ext in extensions/*/; do
+        if [[ -f "$ext/index.ts" ]]; then
+            echo "  - $(basename "$ext")" >&2
+        fi
+    done
+    exit 1
+fi
+
+# Remove trailing slash if present
+EXT_NAME="${EXT_NAME%/}"
+
+# Get the git repository root
+GIT_ROOT="$(git rev-parse --show-toplevel)"
+
+# Source and target paths
+SRC="$GIT_ROOT/extensions/$EXT_NAME"
+TARGET="$HOME/.pi/agent/extensions/$EXT_NAME"
+
+# Validate source exists
+if [[ ! -d "$SRC" ]]; then
+    echo "Error: Extension '$EXT_NAME' not found in $SRC" >&2
+    exit 1
+fi
+
+if [[ ! -f "$SRC/index.ts" ]]; then
+    echo "Error: Extension '$EXT_NAME' does not contain index.ts" >&2
+    exit 1
+fi
+
+# Ensure target directory exists
+mkdir -p "$HOME/.pi/agent/extensions"
+
+# Remove existing target (file, directory, or symlink)
+if [[ -e "$TARGET" || -L "$TARGET" ]]; then
+    rm -rf "$TARGET"
+fi
+
+# Create symlink
+ln -sv "$SRC" "$TARGET"
+
+echo ""
+echo "✓ Extension '$EXT_NAME' installed to: $TARGET"
+echo "  → Points to: $SRC"
+echo ""
+echo "Reload in pi with: /reload"
