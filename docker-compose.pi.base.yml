@@ -41,7 +41,7 @@ services:
 
       # Generic mode: Mount current directory as workspace
       # (Only used if not using sandbox workflow)
-      - .:/workspace
+#      - .:/workspace
 
       # Optional: Additional custom mounts
       # - ${CUSTOM_PATH:-}:${CUSTOM_PATH:-}

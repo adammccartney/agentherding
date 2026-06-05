@@ -451,10 +451,25 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				// Confirm before applying
+				// For Merge mode: first do dry-run to show what will change
+				// Rebuild rsyncArgs without the --dry-run that was added for preview
+				const mergeRsyncArgs = [
+					"-av",
+					"--exclude", "AGENTS.md",
+					"--exclude", ".git/",
+					originalPath + "/",
+					sandboxPath + "/",
+				];
+
+				// Step 1: Run dry-run to show what will change
+				const previewResult = await pi.exec("rsync", [...mergeRsyncArgs, "--dry-run"], { timeout: 60 });
+
+				// Step 2: Show preview and ask for confirmation
+				const previewOutput = previewResult.stdout?.trim() || "No changes detected.";
 				const confirmed = await ctx.ui.confirm(
 					"Apply Sync",
 					`Sync changes from:\n  ${originalPath}\n  →\n  ${sandboxPath}\n\n` +
+					`Preview of changes:\n${previewOutput}\n\n` +
 					`This will copy new and changed files from the original.\n` +
 					`Files unique to the sandbox will be PRESERVED.\n` +
 					`AGENTS.md will not be modified.`
@@ -464,6 +479,9 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Sandbox sync cancelled", "info");
 					return;
 				}
+
+				// Step 3: Run actual sync (without --dry-run)
+				await pi.exec("rsync", mergeRsyncArgs, { timeout: 60 });
 
 				ctx.ui.notify("Sandbox synced successfully!", "success");
 
