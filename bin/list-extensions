@@ -28,16 +28,8 @@ echo "======================================================"
 if [[ -d "$HOME/.pi/agent/extensions" ]]; then
     shopt -s nullglob
     for ext in "$HOME/.pi/agent/extensions"/*; do
-        if [[ -L "$ext" ]]; then
-            target="$(readlink "$ext")"
-            name="$(basename "$ext")"
-            if [[ "$target" == "$GIT_ROOT"* ]]; then
-                echo "  → $name (symlink → this repo)"
-            else
-                echo "  → $name (symlink)"
-            fi
-        elif [[ -d "$ext" ]]; then
-            echo "  • $(basename "$ext") (copy)"
+        if [[ -d "$ext" ]]; then
+            echo "  • $(basename "$ext")"
         fi
     done
     shopt -u nullglob

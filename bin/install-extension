@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# Install a pi extension globally via symlink
+# Install a pi extension globally by copying
 #
 # Usage: ./bin/install-extension <extension-name>
 #
 # Example:
 #   ./bin/install-extension sandbox-workflow
 #
-# This creates a symlink from ~/.pi/agent/extensions/<name>
-# to the extension in this repository, so changes are immediately reflected.
+# This copies the extension from this repository to ~/.pi/agent/extensions/<name>.
+# Changes to the source repository will NOT be reflected automatically.
+# Re-run this script to update the extension.
 #
 
 set -euo pipefail
@@ -56,11 +57,12 @@ if [[ -e "$TARGET" || -L "$TARGET" ]]; then
     rm -rf "$TARGET"
 fi
 
-# Create symlink
-ln -sv "$SRC" "$TARGET"
+# Copy extension to target
+cp -rv "$SRC" "$TARGET"
 
 echo ""
 echo "✓ Extension '$EXT_NAME' installed to: $TARGET"
-echo "  → Points to: $SRC"
+echo "  → Copied from: $SRC"
 echo ""
+echo "Note: This is a copy, not a symlink. To update, re-run this script."
 echo "Reload in pi with: /reload"

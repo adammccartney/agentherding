@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 
 interface SandboxState {
@@ -340,7 +340,61 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const { sandboxPath, originalPath } = sandboxState;
+			let { sandboxPath, originalPath } = sandboxState;
+
+			// Validate paths exist in current environment
+			if (!existsSync(sandboxPath)) {
+				ctx.ui.notify(
+					`Sandbox path does not exist: ${sandboxPath}\n\n` +
+					`This may happen if the sandbox was created outside a container.\n` +
+					`Use /sandbox:enter <path> with the correct container path.`,
+					"error"
+				);
+				return;
+			}
+
+			if (originalPath && !existsSync(originalPath)) {
+				// Original path doesn't exist - likely a host/container path mismatch
+				if (!ctx.hasUI) {
+					ctx.ui.notify(
+						`Original repository path does not exist: ${originalPath}\n\n` +
+						`This may happen if the sandbox was created outside a container.\n` +
+						`Please provide the correct path within this environment.`,
+						"error"
+					);
+					return;
+				}
+
+				const confirmed = await ctx.ui.confirm(
+					"Path Mismatch Detected",
+					`The original repository path (${originalPath}) does not exist in this environment.\n\n` +
+					`This often happens when a sandbox created on the host is used inside a container.\n\n` +
+					`Would you like to provide the correct path for this environment?`
+				);
+
+				if (!confirmed) {
+					ctx.ui.notify("Sync cancelled", "info");
+					return;
+				}
+
+				// Prompt for correct path
+				const newPath = await ctx.ui.input(
+					"Original Repository Path",
+					`Enter the path to the original repository in this environment:`,
+					originalPath
+				);
+
+				if (!newPath || !existsSync(newPath)) {
+					ctx.ui.notify(`Invalid path: ${newPath}`, "error");
+					return;
+				}
+
+				originalPath = normalizePath(newPath);
+				// Update state with corrected path
+				sandboxState = { ...sandboxState, originalPath };
+				pi.appendEntry(STATE_KEY, sandboxState);
+				ctx.ui.notify(`Updated original path to: ${originalPath}`, "info");
+			}
 
 			// Offer sync mode options
 			const mode = await ctx.ui.select(
@@ -429,14 +483,32 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			const sandboxExists = sandboxState.sandboxPath && existsSync(sandboxState.sandboxPath);
+			const originalExists = sandboxState.originalPath && existsSync(sandboxState.originalPath);
+
 			const lines = [
 				"Sandbox Status",
 				"==============",
 				"",
 				`Active: Yes`,
-				`Original: ${sandboxState.originalPath}`,
-				`Sandbox: ${sandboxState.sandboxPath}`,
+				`Original: ${sandboxState.originalPath || "(not set)"} ${originalExists ? "✓" : "✗"}`,
+				`Sandbox: ${sandboxState.sandboxPath} ${sandboxExists ? "✓" : "✗"}`,
 				"",
+			];
+
+			if (!sandboxExists) {
+				lines.push("⚠️  WARNING: Sandbox path does not exist!");
+				lines.push("   Use /sandbox:enter <path> to point to the correct location.");
+				lines.push("");
+			}
+			if (!originalExists && sandboxState.originalPath) {
+				lines.push("⚠️  WARNING: Original repository path does not exist!");
+				lines.push("   This may indicate a host/container path mismatch.");
+				lines.push("   Use /sandbox:repair to fix the path.");
+				lines.push("");
+			}
+
+			lines.push(
 				"Constraints:",
 				"  - Writes/edits blocked outside sandbox",
 				"  - Dangerous commands blocked (sudo, rm -rf, etc.)",
@@ -445,8 +517,9 @@ export default function (pi: ExtensionAPI) {
 				"Commands:",
 				"  /sandbox:enter <path> - Enter/resume a sandbox",
 				"  /sandbox:sync         - Pull updates from original",
+				"  /sandbox:repair       - Fix path mismatches (e.g., container)",
 				"  /sandbox:status       - Show this message",
-			];
+			);
 
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
@@ -486,6 +559,84 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify("Sandbox state cleared. Files remain on disk.", "info");
+		},
+	});
+
+	// Command: /sandbox:repair
+	pi.registerCommand("sandbox:repair", {
+		description: "Repair sandbox paths when running in a different environment (e.g., container)",
+		handler: async (_args, ctx) => {
+			if (!sandboxState.initialized) {
+				ctx.ui.notify("No active sandbox to repair.", "info");
+				return;
+			}
+
+			if (!ctx.hasUI) {
+				ctx.ui.notify("Sandbox repair requires interactive mode", "error");
+				return;
+			}
+
+			const lines = [
+				"Sandbox Path Repair",
+				"===================",
+				"",
+				`Current sandbox path: ${sandboxState.sandboxPath}`,
+				`  Exists: ${existsSync(sandboxState.sandboxPath!) ? "Yes" : "No"}`,
+				`Current original path: ${sandboxState.originalPath || "(not set)"}`,
+				`  Exists: ${sandboxState.originalPath && existsSync(sandboxState.originalPath) ? "Yes" : "No"}`,
+				"",
+			];
+
+			if (!sandboxState.sandboxPath || !existsSync(sandboxState.sandboxPath)) {
+				ctx.ui.notify(lines.join("\n") + "\nSandbox path is invalid. Use /sandbox:enter instead.", "error");
+				return;
+			}
+
+			if (sandboxState.originalPath && existsSync(sandboxState.originalPath)) {
+				ctx.ui.notify(lines.join("\n") + "\nAll paths are valid. No repair needed.", "info");
+				return;
+			}
+
+			const confirmed = await ctx.ui.confirm(
+				"Repair Original Path",
+				lines.join("\n") + "\nThe original repository path is not accessible in this environment.\n\n" +
+				"This commonly happens when:\n" +
+				"- A sandbox created on the host is used inside a container\n" +
+				"- Paths differ between environments\n\n" +
+				"Would you like to update the original path?"
+			);
+
+			if (!confirmed) {
+				ctx.ui.notify("Repair cancelled", "info");
+				return;
+			}
+
+			const newPath = await ctx.ui.input(
+				"Original Repository Path",
+				"Enter the correct path to the original repository:",
+				sandboxState.originalPath || ""
+			);
+
+			if (!newPath) {
+				ctx.ui.notify("No path provided", "error");
+				return;
+			}
+
+			const normalizedPath = normalizePath(newPath);
+			if (!existsSync(normalizedPath)) {
+				ctx.ui.notify(`Path does not exist: ${normalizedPath}`, "error");
+				return;
+			}
+
+			sandboxState = { ...sandboxState, originalPath: normalizedPath };
+			pi.appendEntry(STATE_KEY, sandboxState);
+
+			ctx.ui.notify(
+				`Sandbox paths repaired!\n\n` +
+				`  Sandbox: ${sandboxState.sandboxPath}\n` +
+				`  Original: ${sandboxState.originalPath}`,
+				"success"
+			);
 		},
 	});
 
@@ -546,7 +697,8 @@ export default function (pi: ExtensionAPI) {
 			let originalPath: string | undefined;
 			try {
 				const agentsContent = readFileSync(agentsPath, "utf-8");
-				const pathMatch = agentsContent.match(/\*\*Sandbox Path\*\*: `([^`]+)`/);
+				// Look for "Original:" or "Sandbox Path:" patterns
+				const pathMatch = agentsContent.match(/(?:Original|Sandbox Path): `([^`]+)`/);
 				if (pathMatch) {
 					originalPath = pathMatch[1];
 				}

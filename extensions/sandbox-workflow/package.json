@@ -2,6 +2,11 @@
   "name": "sandbox-workflow",
   "private": true,
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }

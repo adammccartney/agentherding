@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Uninstall a pi extension (remove symlink)
+# Uninstall a pi extension (remove copied directory)
 #
 # Usage: ./bin/uninstall-extension <extension-name>
 #
@@ -18,10 +18,8 @@ if [[ -z "$EXT_NAME" ]]; then
     echo "Installed extensions:" >&2
     if [[ -d "$HOME/.pi/agent/extensions" ]]; then
         for ext in "$HOME/.pi/agent/extensions"/*/; do
-            if [[ -L "$ext" ]]; then
-                echo "  - $(basename "$ext") (symlink)" >&2
-            elif [[ -d "$ext" ]]; then
-                echo "  - $(basename "$ext") (copy)" >&2
+            if [[ -d "$ext" ]]; then
+                echo "  - $(basename "$ext")" >&2
             fi
         done
     fi
@@ -30,28 +28,14 @@ fi
 
 TARGET="$HOME/.pi/agent/extensions/$EXT_NAME"
 
-if [[ ! -e "$TARGET" ]]; then
+if [[ ! -d "$TARGET" ]]; then
     echo "Error: Extension '$EXT_NAME' is not installed" >&2
     exit 1
 fi
 
-if [[ -L "$TARGET" ]]; then
-    rm -v "$TARGET"
-    echo ""
-    echo "✓ Symlink removed"
-elif [[ -d "$TARGET" ]]; then
-    echo "Warning: '$TARGET' is a copy, not a symlink" >&2
-    read -p "Remove it anyway? [y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        rm -rv "$TARGET"
-        echo ""
-        echo "✓ Extension removed"
-    else
-        echo "Cancelled"
-        exit 0
-    fi
-fi
+rm -rv "$TARGET"
+echo ""
+echo "✓ Extension removed"
 
 echo ""
 echo "Reload in pi with: /reload"

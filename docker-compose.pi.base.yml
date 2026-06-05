@@ -1,0 +1,59 @@
+# Docker Compose configuration for pi coding agent
+#
+# Security: Runs as non-root user, uses environment variables for paths
+#
+# Setup:
+#   1. Copy .env.example to .env and customize paths for your workflow
+#   2. Run: docker-compose -f docker-compose.pi.yml run --rm pi
+#
+# Usage:
+#   # Start interactive session
+#   docker compose -f docker-compose.pi.yml run --rm pi
+#
+#   # With a prompt
+#   docker compose -f docker-compose.pi.yml run --rm pi -p "Review this code"
+#
+#   # Continue previous session
+#   docker compose -f docker-compose.pi.yml run --rm pi -c
+#
+#   # Run with specific pi command
+#   docker compose -f docker-compose.pi.yml run --rm pi pi list
+#
+services:
+  pi:
+    build:
+      context: .
+      dockerfile: Dockerfile.pi
+      args:
+        # Match your host user to avoid permission issues
+        HOST_UID: ${UID:-1000}
+        HOST_GID: ${GID:-1000}
+    image: pi-agent
+    stdin_open: true
+    tty: true
+    # Run as non-root user (matches UID/GID from build args)
+    user: "${UID:-1000}:${GID:-1000}"
+    working_dir: ${WORKDIR:-/workspace}
+    # Entrypoint script handles running pi with any arguments
+    volumes:
+      # Mount your pi configuration (settings, sessions, extensions, auth)
+      - ${PI_CONFIG_DIR:-$HOME/.pi/agent}:/home/node/.pi/agent
+
+      # Generic mode: Mount current directory as workspace
+      # (Only used if not using sandbox workflow)
+      - .:/workspace
+
+      # Optional: Additional custom mounts
+      # - ${CUSTOM_PATH:-}:${CUSTOM_PATH:-}
+    environment:
+      # API keys - set these in your shell or .env file
+      - OPENAI_API_KEY
+      # Optional: customize pi behavior
+      - PI_CODING_AGENT_DIR=/home/node/.pi/agent
+      - PI_OFFLINE=0
+      - PI_TELEMETRY=1
+      # Terminal settings
+      - TERM=${TERM:-xterm-256color}
+      # User info (for display purposes)
+      - USER=node
+      - HOME=/home/node

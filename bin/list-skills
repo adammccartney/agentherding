@@ -30,16 +30,8 @@ echo "=============================================="
 if [[ -d "$HOME/.pi/agent/skills" ]]; then
     shopt -s nullglob
     for skill in "$HOME/.pi/agent/skills"/*; do
-        if [[ -L "$skill" ]]; then
-            target="$(readlink "$skill")"
-            name="$(basename "$skill")"
-            if [[ "$target" == "$GIT_ROOT"* ]]; then
-                echo "  → $name (symlink → this repo)"
-            else
-                echo "  → $name (symlink)"
-            fi
-        elif [[ -d "$skill" ]]; then
-            echo "  • $(basename "$skill") (copy)"
+        if [[ -d "$skill" ]]; then
+            echo "  • $(basename "$skill")"
         fi
     done
     shopt -u nullglob

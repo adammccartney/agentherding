@@ -21,6 +21,22 @@ cp -r ./extensions/sandbox-workflow ~/.pi/agent/extensions/
 
 ## Usage
 
+### Container/Host Path Mismatch
+
+If you create a sandbox on the host and then run pi inside a container, the stored paths may not match. The extension will detect this and offer to repair the paths automatically when you run `/sandbox:sync`.
+
+You can also manually repair paths with:
+
+```
+/sandbox:repair
+```
+
+Or re-enter the sandbox with the correct container path:
+
+```
+/sandbox:enter ~/src/sandbox/my-repo
+```
+
 ### Create a Sandbox
 
 ```bash
@@ -124,7 +140,9 @@ The extension intercepts all `bash` tool calls and checks for dangerous patterns
 | Command | Description |
 |---------|-------------|
 | `/sandbox:create <path>` | Create sandbox from source repository |
+| `/sandbox:enter <path>` | Enter/resume an existing sandbox |
 | `/sandbox:sync` | Sync changes from original to sandbox |
+| `/sandbox:repair` | Fix path mismatches (e.g., host ↔ container) |
 | `/sandbox:status` | Show current sandbox state |
 | `/sandbox:clear` | Clear sandbox state (keep files) |
 

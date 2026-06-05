@@ -1,0 +1,29 @@
+# docker-compose.pi.sandbox.yml
+
+# Sandbox Workflow:
+#   For the sandbox-workflow extension, set in your .env:
+#   - SANDBOX_BASE_HOST=/home/youruser/src/sandbox
+#   - SANDBOX_BASE_CONTAINER=/home/node/src/sandbox
+#   - ORIGINAL_REPO_PATH=/home/youruser/src/gitlab.com/.../ansible-rke2
+#
+#   Then run pi from within $HOME/src/sandbox/<project>
+
+services:
+  pi:
+    volumes:
+      # Mount your pi configuration (settings, sessions, extensions, auth)
+      - ${PI_CONFIG_DIR:-$HOME/.pi/agent}:/home/node/.pi/agent
+      
+      # Sandbox workflow: Mount the entire sandbox directory
+      # The working directory will be set to the specific project subdirectory
+      - ${SANDBOX_BASE_HOST:-$HOME/src/sandbox}:${SANDBOX_BASE_CONTAINER:-/home/node/src/sandbox}
+      
+      # Optional: Mount original repo for sandbox sync
+      # This allows the /sandbox:sync command to access the source repository
+      - ${ORIGINAL_REPO_PATH:-}:${ORIGINAL_REPO_PATH:-}
+      
+      # Optional: Additional custom mounts
+      # - ${CUSTOM_PATH:-}:${CUSTOM_PATH:-}
+    environment:
+      # Sandbox configuration
+      - SANDBOX_BASE_CONTAINER=${SANDBOX_BASE_CONTAINER:-/home/node/src/sandbox}
