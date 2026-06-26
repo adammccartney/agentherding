@@ -1,5 +1,5 @@
 {
-  "name": "sandbox-todos",
+  "name": "todos",
   "private": true,
   "pi": {
     "extensions": ["./index.ts"]

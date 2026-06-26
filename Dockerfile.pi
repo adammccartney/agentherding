@@ -30,6 +30,10 @@ RUN apt-get update && apt-get install -y \
     rsync \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv (Python package manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/home/node/.local/bin:$PATH"
+
 # Use the existing 'node' user and adjust UID/GID to match host
 # The node:22-slim image already has a 'node' user with UID 1000
 # We modify it to match the host UID/GID for proper volume permissions
