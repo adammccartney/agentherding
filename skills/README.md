@@ -29,14 +29,38 @@ fix(parser): handle empty input gracefully
 chore(deps): bump lodash to 4.17.21
 ```
 
+### shannon
+
+Interact with Neovim via RPC to annotate code, navigate files, and do walkthroughs.
+
+**Usage:**
+```
+/skill:shannon
+```
+
+Or let the agent discover it naturally when a prompt arrives from Shannon or
+you ask to show something "in Neovim".
+
+Requires the [wincent/shannon](https://github.com/wincent/shannon) nvim plugin
+installed at the standard pack location
+(`~/.config/nvim/pack/bundle/opt/shannon/`). The bundled
+`scripts/shannon-find-nvim.sh` locates the Neovim server socket of an nvim
+running in a sibling tmux pane.
+
+Adapted from [wincent/wincent-agent-plugins](https://github.com/wincent/wincent-agent-plugins/tree/main/claude/shannon).
+
 ## Skill Structure
 
 ```
 skills/
 ├── commit/
-│   ├── SKILL.md           # Main skill definition
+│   └── SKILL.md           # Main skill definition
+├── uv/
+│   └── SKILL.md
+├── shannon/
+│   ├── SKILL.md
 │   └── scripts/
-│       └── commit.sh      # Helper script (optional)
+│       └── shannon-find-nvim.sh  # Helper script (optional)
 └── README.md              # This file
 ```
 
