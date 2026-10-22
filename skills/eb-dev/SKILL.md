@@ -35,8 +35,9 @@ Site traps the bootstrap dodges, each cost ≥1 trial; read script comments befo
 
 `scripts/ebdev-mk <topic>` materializes the per-task layout. Envs are short-lived and single-purpose.
 
-- sandbox/VM: `/srv/eb-dev/<topic>/` — admin contract per machine: `sudo install -d -o ad -g ad /srv/eb-dev` once. **Never** under `~/src` or `~/agent-context` (both rsync).
+- sandbox/VM: `$HOME/eb-dev/<topic>/` — zero admin; **never** under `~/src` (incl. the container-mounted `~/src/sandbox`) or `~/agent-context` (both sync/mount). This is the same FHS re-cast as the toolchain: workspaces are a user's local working data; `/srv` was wrong there too (slurm pattern: build env in home, install in `/opt`).
 - cluster: `EBDEV_BASE="$SCRATCH" scripts/ebdev-mk <topic>` → `${SCRATCH}/EasyBuild-<topic>/` (live convention).
+- machine-level installs that must span users stay overridable via `EBDEV_BASE` (e.g. `/var/tmp/eb-dev` — mind systemd-tmpfiles' 30-day reaping).
 
 ## Running EB
 

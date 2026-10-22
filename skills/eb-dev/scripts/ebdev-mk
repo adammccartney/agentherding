@@ -2,21 +2,28 @@
 # ebdev-mk — scaffold a per-task EasyBuild development environment
 # (pi skill "eb-dev", deliverable)
 #
-# Layout contract (decided 2026-10-22, TODO-3711c47c):
-#   sandbox/VM : /srv/eb-dev/<topic>/          NOT ~/src, NOT ~/agent-context (both rsync)
+# Layout contract (decided 2026-10-22, TODO-3711c47c; re-cast same day on
+# FHS grounds — workspaces are a USER's local working data, not served data,
+# so /srv was wrong; mirrors the slurm pattern: build envs in home, installs
+# in /opt):
+#   sandbox/VM : $HOME/eb-dev/<topic>/         zero admin; OUTSIDE the synced/
+#                                              mounted paths (~/src incl.
+#                                              ~/src/sandbox, ~/agent-context)
 #   cluster    : ${SCRATCH}/EasyBuild-<topic>/ (live LiSC convention)
+#   override   : EBDEV_BASE=<dir> ebdev-mk <topic>   (e.g. /var/tmp/eb-dev;
+#                 systemd-tmpfiles 30d reaping on el/Fedora applies there)
 #
 # Envs are short-lived and single-purpose: one topic, one owner, receipts
 # under logs/. Refuse to clobber an existing env — reuse is a decision the
 # operator must make aloud (rm -rf first).
 #
-# Usage:  ebdev-mk <topic>            # /srv/eb-dev/<topic>
+# Usage:  ebdev-mk <topic>            # $HOME/eb-dev/<topic>
 #         EBDEV_BASE="$SCRATCH" ebdev-mk <topic>   # cluster layout
 
 set -euo pipefail
 
 TOPIC="${1:?usage: ebdev-mk <topic>   # e.g. fftw, icon, vasp-6.6.1}"
-BASE="${EBDEV_BASE:-/srv/eb-dev}"
+BASE="${EBDEV_BASE:-$HOME/eb-dev}"
 
 # naming rule: under an eb-dev root → plain <topic>; elsewhere (cluster
 # scratch shared with other tools) → EasyBuild-<topic>
