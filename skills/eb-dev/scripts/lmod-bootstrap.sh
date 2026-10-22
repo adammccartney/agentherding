@@ -24,13 +24,25 @@ set -euo pipefail
 # Profiles:
 #     lua/tcl/Lmod all from source, root-free, sha-pinned per stage. For
 #     sandboxes/audit targets/anywhere without sudo.
-#   distro (design agreed 2026-10-22, NOT yet implemented) — package-manager
-#     provisioning of lua + luarocks (posix/lfs lua modules) + tcl; Lmod still
-#     from source. Payload verified 2026-10-22: luarocks 3.9.2-6.el10_0 (EPEL
-#     asc-rocky-10 repo), luarocks 3.9.2-9.fc44 (fedora); lua 5.4.6 AppStream
-#     (Rocky 10), lua 5.4.8 @System (Fedora 44). Open: exact dnf package set
-#     (tcl pkg name per image; luarocks pulls which lua module rpms vs pure
-#     luarocks installs); whether Lmod links distro lua in this profile.
+#   distro (design agreed 2026-10-22, NOT yet implemented) — dnf provisioning
+#     of lua + posix/lfs lua modules + tcl(+devel) + bc; Lmod still from
+#     source. Lmod 9.4's real gate (configure.ac:1013): lua 5.1..5.5 — the
+#     INSTALL file's "Lua 5.1 or 5.2 or 5.3" is stale el6-era doc, verified
+#     against the 9.4 tarball; 5.4 is squarely supported. luaposix >= 33;
+#     term module optional (HAVE_LUA_TERM=no is fine).
+#     Fedora 44 set (verified 2026-10-22): lua(5.4.8) lua-posix(36.3)
+#     lua-filesystem(1.8.0) tcl tcl-devel(9.0.2 == source pin) bc(1.08.2).
+#     tcl-devel drags pkgconfig(zlib) i.e. zlib-devel — the piece Lmod's tcl
+#     probe needs. Rocks come as RPMs; luarocks NOT required in this profile.
+#     Rocky 10 set PENDING on-login01 verification (lua AppStream 5.4.6 +
+#     luarocks EPEL 3.9.2 known); tcl/tcl-devel/bc/RPM-rock names TBC there.
+#     tcl decision: take DISTRO tcl in this profile — Lmod accepts any 8.4+
+#     (probes tclsh9.0/tclsh9/tclsh; fastTCLInterp optional anyway), and
+#     distro tcl links system zlib, killing the source-profile bundled-zlib
+#     traps wholesale. The source tcl/bc stages stay for zlib-devel-free
+#     hosts (test1) only. Lmod links distro lua via --with-luaBin=/usr/bin;
+#     rpm rocks land in /usr/share/lua/5.4 (distro package.path) → Lmod's
+#     baked SYS_LUA_PATH needs no env weaving.
 # Distro-profile context (Lmod configure hard-requirements): lua on PATH +
 # lua interpreter's posix + lfs modules (distro rpm or `luarocks install
 # luaposix luafilesystem`) + tclsh on PATH. Lmod checks all of these.
