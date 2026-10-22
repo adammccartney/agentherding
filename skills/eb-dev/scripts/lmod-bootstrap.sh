@@ -34,8 +34,11 @@ set -euo pipefail
 #     lua-filesystem(1.8.0) tcl tcl-devel(9.0.2 == source pin) bc(1.08.2).
 #     tcl-devel drags pkgconfig(zlib) i.e. zlib-devel — the piece Lmod's tcl
 #     probe needs. Rocks come as RPMs; luarocks NOT required in this profile.
-#     Rocky 10 set PENDING on-login01 verification (lua AppStream 5.4.6 +
-#     luarocks EPEL 3.9.2 known); tcl/tcl-devel/bc/RPM-rock names TBC there.
+#     Rocky 10 set (partial receipts): tcl 8.6.13-4.el10 BaseOS, already
+#     @System on login01 (user-verified 2026-10-22; plain tclsh, Lmod-accepted
+#     8.4+ range); lua AppStream 5.4.6 + luarocks EPEL 3.9.2 known. STILL
+#     PENDING one login01 dnf repoquery: lua-posix lua-filesystem tcl-devel
+#     bc (rock RPM names may differ from Fedora's).
 #     tcl decision: take DISTRO tcl in this profile — Lmod accepts any 8.4+
 #     (probes tclsh9.0/tclsh9/tclsh; fastTCLInterp optional anyway), and
 #     distro tcl links system zlib, killing the source-profile bundled-zlib
