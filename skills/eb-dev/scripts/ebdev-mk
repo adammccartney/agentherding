@@ -1,0 +1,63 @@
+#!/bin/bash
+# ebdev-mk — scaffold a per-task EasyBuild development environment
+# (pi skill "eb-dev", deliverable)
+#
+# Layout contract (decided 2026-10-22, TODO-3711c47c):
+#   sandbox/VM : /srv/eb-dev/<topic>/          NOT ~/src, NOT ~/agent-context (both rsync)
+#   cluster    : ${SCRATCH}/EasyBuild-<topic>/ (live LiSC convention)
+#
+# Envs are short-lived and single-purpose: one topic, one owner, receipts
+# under logs/. Refuse to clobber an existing env — reuse is a decision the
+# operator must make aloud (rm -rf first).
+#
+# Usage:  ebdev-mk <topic>            # /srv/eb-dev/<topic>
+#         EBDEV_BASE="$SCRATCH" ebdev-mk <topic>   # cluster layout
+
+set -euo pipefail
+
+TOPIC="${1:?usage: ebdev-mk <topic>   # e.g. fftw, icon, vasp-6.6.1}"
+BASE="${EBDEV_BASE:-/srv/eb-dev}"
+
+# naming rule: under an eb-dev root → plain <topic>; elsewhere (cluster
+# scratch shared with other tools) → EasyBuild-<topic>
+case "$(basename "$BASE")" in
+    eb-dev) DIR="${BASE}/${TOPIC}" ;;
+    *)      DIR="${BASE}/EasyBuild-${TOPIC}" ;;
+esac
+
+if [ -e "${DIR}" ]; then
+    echo "ERROR: ${DIR} already exists — dev envs are single-purpose." >&2
+    echo "       remove it explicitly if reuse is the intent." >&2
+    exit 1
+fi
+
+mkdir -p "${DIR}"/{clones,sources,logs,venv}
+
+cat > "${DIR}/README.md" <<EOF
+# EasyBuild dev env: ${TOPIC}
+
+Created $(date -u +%FT%TZ) by ebdev-mk (pi skill eb-dev).
+
+## Layout
+
+- clones/   easybuild framework + easyconfigs + easyblocks (dev branches)
+- venv/     EB_VENV (cluster-style run mode); stays empty on the sandbox
+- sources/  canonical vendoring mirror — every tarball sha256-stamped into
+            SHA256SUMS. NOTE: distinct from the "as-run" surface (what the
+            eb invocation actually consumed; from-pr/inject-checksums paths).
+            Do not conflate the two.
+- logs/     timestamped eb receipts (build/test/dry-run)
+
+## Run EB
+
+- sandbox (ephemeral):  uvx --from 'easybuild==5.4.1' eb --dry-run <recipe>.eb
+- cluster (persistent): source venv/bin/activate  # EB_VENV + EESSI-extend
+
+Full dependency resolution happens cluster-side by design.
+Traps checklist: see SKILL.md in the eb-dev skill.
+EOF
+
+[ -f "${DIR}/sources/SHA256SUMS" ] || touch "${DIR}/sources/SHA256SUMS"
+
+echo "created ${DIR}"
+find "${DIR}" -maxdepth 1 -mindepth 1 | sort
