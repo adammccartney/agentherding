@@ -24,6 +24,29 @@ sha256-pinned per fetched tarball. Proven end-to-end 2026-10-22 on test1
 `module load` smoke. Default prefix: `/opt/lmod-toolchain` — FHS
 add-on software area (the site's /opt-wide convention, cf. slurm)
 
+**.sources rule: always check the default path first** — before any fetch,
+look in `/opt/lmod-toolchain/.sources/` for the version-pinned tarball
+(LiSC images may ship it pre-populated); download only on miss.
+Placement history: /srv/eb-dev (FHS-miscast) → /opt/eb-dev (user call) →
+$HOME/eb-dev for workspaces (final: dev envs are user data; /opt stays
+the toolchain home only).
+
+**TACC `/opt/apps` convention (the upstream archetype of this shape, doc-
+cited)**: Lmod's own install guide (TACC-authored) — "it is assumed that
+all optional software is going to be installed in /opt/apps". The idiom:
+per-package version-isolated payload dirs (`/opt/apps/lua/X.Y.Z`,
+`/opt/apps/lmod/X.Y`), a **current-selector symlink per package**
+(`/opt/apps/lua → X.Y.Z`, `/opt/apps/lmod/lmod → <ver>`) with boot wiring
+pointing at the selector and not the version
+(`/etc/profile.d/z00_lmod.sh`, z-ordered after other profile.d), and
+modulefiles as a sibling tree (`/opt/apps/modulefiles/{Linux,Core}`).
+Upgrade = repoint the symlink; nothing user-facing hardcodes a version.
+Our `/opt/lmod-toolchain` is the deliberately narrower single-toolchain
+specialization; the selector-symlink layer is future-proofing we have
+not yet adopted (our starter docs still hardcode `…/lmod/9.4/init/profile`
+— when that changes, `ln -s <ver> lmod` is the TACC-faithful fix).
+(Lmod docs, 030_installing.html; read as authority, not lore.)
+
 Admin once per machine: `sudo install -d -o $USER -g $USER /opt/lmod-toolchain`.
 
 ```bash
