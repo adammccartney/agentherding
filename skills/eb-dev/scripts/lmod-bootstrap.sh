@@ -38,12 +38,22 @@ set -euo pipefail
 #     5.1..5.5 — the INSTALL file's "Lua 5.1 or 5.2 or 5.3" is stale el6-era
 #     doc; luaposix >= 33 required, `term` module optional.
 #     Unified package set, verified 2026-10-22 for both targets:
-#       Fedora 44:  lua(5.4.8) lua-posix(36.3) lua-filesystem(1.8.0)
-#                   tcl tcl-devel(9.0.2) bc(1.08.2)
-#       Rocky 10:   lua(5.4.6 AppStream) lua-posix(36.2.1-9.el10_1, EPEL)
+#       Fedora 44:  lua(5.4.8) lua-devel(5.4.8) lua-posix(36.3)
+#                   lua-filesystem(1.8.0) tcl tcl-devel(9.0.2) bc(1.08.2)
+#       Rocky 10:   lua(5.4.6 AppStream) lua-devel(5.4.6-7.el10, CRB — node
+#                   images need CRB enabled, as on login01)
+#                   lua-posix(36.2.1-9.el10_1, EPEL)
 #                   lua-filesystem(1.8.0-14.el10_0, EPEL) tcl(8.6.13 BaseOS,
 #                   @System) tcl-devel(8.6.13) bc(1.07.1-23.el10)
 #                   (Rocky 10 receipts user-verified on login01 2026-10-22)
+#     lua-devel rationale: with no `term` lua module installed, Lmod builds
+#     its BUNDLED lua-term object — that compile needs lua.h. Real lua knobs
+#     (learned 2026-10-22 from configure.ac): --with-lua=<abs interpreter>,
+#     --with-luac=<abs>, --with-lua_include=<dir>; an earlier draft of this
+#     script passed invented --with-luaBin/--with-luaInc flags that configure
+#     silently ignored (WARNING visible in the distro trial). Fedora note:
+#     pkgconfig(zlib) resolves to zlib-ng-compat-devel on modern Fedora
+#     (zlib-ng) — receipt prints "zlib 1.3.1.zlib-ng"; that's expected.
 #     tcl decision: DISTRO tcl here — Lmod accepts any 8.4+ (probes
 #     tclsh9.0/tclsh9/tclsh; fastTCLInterp optional). Distro tcl links system
 #     zlib and tcl-devel drags pkgconfig(zlib), killing the source-profile
@@ -119,7 +129,7 @@ fetch() {
 
 # The dnf package set; same names on Fedora 44 and Rocky 10. Override for a
 # differently-organised distro (DNF_PKGS="..." lmod-bootstrap.sh ...).
-DNF_PKGS="${DNF_PKGS:-lua lua-posix lua-filesystem tcl tcl-devel bc}"
+DNF_PKGS="${DNF_PKGS:-lua lua-devel lua-posix lua-filesystem tcl tcl-devel bc}"
 
 stage() { echo; echo "===== $1 ====="; }
 for t in curl tar sha256sum; do need "$t"; done
@@ -135,6 +145,7 @@ case "${PROFILE}" in
         # now so failures blame the package layer, not Lmod.
         lua -e "require 'posix'; require 'posix.unistd'; require 'lfs'; print('lua modules OK (' .. _VERSION .. ')')"
         for t in tclsh bc; do need "$t"; done
+        [ -f "${LUA_INC:-/usr/include}/lua.h" ] || { echo "ERROR: lua.h missing — lua-devel landed? (no 'term' lua module installed -> Lmod builds its bundled lua-term object, which needs lua.h)" >&2; exit 1; }
         pkg-config --exists tcl  || { echo "ERROR: tcl.pc missing — tcl-devel landed?" >&2; exit 1; }
         pkg-config --exists zlib || { echo "ERROR: zlib.pc missing — zlib-devel landed (via tcl-devel)?" >&2; exit 1; }
         echo "tcl $(pkg-config --modversion tcl), zlib $(pkg-config --modversion zlib) — distro prerequisites OK"
@@ -245,10 +256,15 @@ else
     LMOD_TCL_KV=( "TCL_INCLUDE=-I${PREFIX}/tcl-${TCL_VER}/include" \
                   "TCL_LIBS=-L${PREFIX}/tcl-${TCL_VER}/lib -Wl,-rpath,${PREFIX}/tcl-${TCL_VER}/lib -ltcl${TCL_VER%.*}" )
 fi
+# Real lua knobs (configure.ac: --with-lua/--with-luac absolute interpreter
+# paths, --with-lua_include header dir). Passed explicitly in BOTH profiles:
+# identical form, only the values move; LUA_INCLUDE drives the bundled
+# lua-term build wherever the headers live.
 ./"${LMOD_SRC}"configure \
     --prefix="${PREFIX}" \
-    --with-luaBin="${LUA_BIN}" \
-    --with-luaInc="${LUA_INC}" \
+    --with-lua="${LUA_BIN}/lua" \
+    --with-luac="${LUA_BIN}/luac" \
+    --with-lua_include="${LUA_INC}" \
     "${LMOD_TCL_KV[@]}"
 # Lmod's configure writes the Makefile into the CWD it was invoked from
 # (BUILD_DIR here), not into the source dir — so make WITHOUT -C.
