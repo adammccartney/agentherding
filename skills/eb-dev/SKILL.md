@@ -9,11 +9,11 @@ Stand up a repeatable EasyBuild dev environment on hosts that lack a site-provid
 
 ## Lmod bootstrap
 
-`scripts/lmod-bootstrap.sh <prefix>` builds the chain lua → luarocks(+luaposix, luafilesystem) → tcl → bc → Lmod, root-free, sha256-pinned per fetched tarball. Proven end-to-end 2026-10-22 on test1 (Fedora 44 Cloud, no sudo, no zlib-devel): Lmod 9.4 green including `module load` smoke.
+`scripts/lmod-bootstrap.sh [prefix]` builds the chain lua → luarocks(+luaposix, luafilesystem) → tcl → bc → Lmod, root-free, sha256-pinned per fetched tarball. Proven end-to-end 2026-10-22 on test1 (Fedora 44 Cloud, no sudo, no zlib-devel): Lmod 9.4 green including `module load` smoke. Default prefix: `/opt/lmod-toolchain` — FHS add-on software area (the site's /opt-wide convention, cf. slurm; `/srv` is served *data* and was re-cast). Admin once per machine: `sudo install -d -o $USER -g $USER /opt/lmod-toolchain`.
 
 ```bash
-scripts/lmod-bootstrap.sh /srv/eb-dev/lmod-toolchain   # one toolchain prefix
-source /srv/eb-dev/lmod-toolchain/lmod/9.4/init/profile
+scripts/lmod-bootstrap.sh                 # -> /opt/lmod-toolchain
+source /opt/lmod-toolchain/lmod/9.4/init/profile
 module --version
 ```
 

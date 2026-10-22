@@ -7,10 +7,15 @@
 #   package — a prefix-led, root-free, version-pinned bootstrap, reproducible
 #   from source tarballs with sha256 receipts at both stages.
 #
-# Usage: lmod-bootstrap.sh <prefix-dir>
-#   e.g. /srv/eb-dev/lmod-toolchain          (admin-granted contract; per-user
-#   writable after one-time root mkdir+chown of /srv/eb-dev)
-#        /tmp/lmod-test-9.4                  (sandbox trial, proven 2026-10-22)
+# Usage: lmod-bootstrap.sh [prefix-dir]      (default: /opt/lmod-toolchain)
+#        /opt/lmod-toolchain                 — the site contract (FHS: /opt =
+#                                              add-on application software, cf.
+#                                              slurm /opt-wide convention; admin
+#                                              once: sudo install -d -o <u> -g <u> /opt/lmod-toolchain)
+#        /tmp/lmod-test-9.4                  (sandbox trial, proven 2026-10-22; also
+#                                             proven at the former /srv/eb-dev default —
+#                                             re-cast 2026-10-22 on FHS grounds:
+#                                             /srv is served DATA, not software)
 # PROFILE=source (default) | PROFILE=distro (dnf hosts: LiSC Rocky 10, Fedora 44)
 # Vars overridable: PROFILE LUA_VER LR_VER TCL_VER BC_VER LMOD_VER LUAPOSIX_VER
 #   LFS_VER TCL_CFG_EXTRA TCL_EXTRA_CFLAGS DNF_PKGS LUA_BIN LUA_INC JOBS
@@ -83,12 +88,23 @@ LMOD_URL="https://github.com/TACC/Lmod/archive/refs/tags/${LMOD_VER}.tar.gz"
 TCL_CFG_EXTRA="${TCL_CFG_EXTRA:---enable-zipfs=no}"
 TCL_EXTRA_CFLAGS="${TCL_EXTRA_CFLAGS:-}"
 
-PREFIX="${1:?usage: lmod-bootstrap.sh <prefix-dir>}"
+PREFIX="${1:-/opt/lmod-toolchain}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
 SOURCES_DIR="${SOURCES_DIR:-${PREFIX}/.sources}"
 KEEP_SOURCES="${KEEP_SOURCES:-1}"
 
-mkdir -p "${PREFIX}" "${SOURCES_DIR}"
+if ! mkdir -p "${PREFIX}" 2>/dev/null; then
+    cat >&2 <<EOF
+ERROR: cannot create ${PREFIX}
+The default prefix assumes the /opt-wide site contract (FHS add-on software
+area, cf. slurm); provision it once per machine:
+    sudo install -d -o "$(id -un)" -g "$(id -gn)" /opt/lmod-toolchain
+or pass an explicit prefix, e.g.:
+    lmod-bootstrap.sh ~/.local/lmod-toolchain
+EOF
+    exit 1
+fi
+mkdir -p "${SOURCES_DIR}"
 
 need() { command -v "$1" >/dev/null || { echo "ERROR: need $1 in PATH" >&2; exit 1; }; }
 fetch() {
