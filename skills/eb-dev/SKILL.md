@@ -22,7 +22,7 @@ Profiles:
 | profile | lua/tcl/bc | lmod | status |
 |---|---|---|---|
 | `source` (default) | all from source, pinned | from source, links own tcl, bakes lua paths | proven |
-| `distro` | dnf packages incl. `tcl-devel`, RPM rocks | from source | **designed, not implemented** — Fedora 44 set verified 2026-10-22: `lua lua-posix lua-filesystem tcl tcl-devel bc` (rocks as RPMs; tcl 9.0.2 == source pin; tcl-devel pulls zlib-devel). Rocky 10 set: tcl 8.6.13 BaseOS @System (user-verified login01 2026-10-22); lua 5.4.6 AppStream, luarocks 3.9.2 EPEL known; `lua-posix lua-filesystem tcl-devel bc` names pending one more login01 query. tcl decision: DISTRO — Lmod accepts 8.4+, distro tcl sidesteps the bundled-zlib traps; Lmod links distro lua via `--with-luaBin=/usr/bin`. Doc trap: Lmod INSTALL's "Lua 5.1–5.3" is stale; real gate configure.ac:1013 = 5.1..5.5 (see script header). |
+| `distro` | dnf (sudo), incl. `tcl-devel`; rocks as RPMs — luarocks unneeded | from source, plain pkg-config tcl probe | **implemented 2026-10-22** — unified set verified on both targets: `lua lua-posix lua-filesystem tcl tcl-devel bc` (Fedora 44: 5.4.8/36.3/1.8.0/9.0.2/1.08.2; Rocky 10 via EPEL+BaseOS: 5.4.6/36.2.1/1.8.0/8.6.13/1.07.1). Shim-harness-verified (fake sudo/dnf + real prereqs); **not yet run on a real dnf host** — first real run on login01 or the Fedora-44 laptop. tcl decision: DISTRO — Lmod accepts 8.4+, distro tcl sidesteps the bundled-zlib traps (Lmod's probe overrides PKG_CONFIG_PATH with the tcl.pc dir, which on real distros also holds zlib.pc). Doc trap: Lmod INSTALL's "Lua 5.1–5.3" is stale; real gate configure.ac:1013 = 5.1..5.5 (see script header). |
 
 Site traps the bootstrap dodges, each cost ≥1 trial; read script comments before "fixing":
 

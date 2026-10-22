@@ -8,11 +8,13 @@
 #   from source tarballs with sha256 receipts at both stages.
 #
 # Usage: lmod-bootstrap.sh <prefix-dir>
-#   e.g. /srv/eb-dev/lmod/8.7.67-lua5.4.8   (admin-granted contract; per-user
+#   e.g. /srv/eb-dev/lmod-toolchain          (admin-granted contract; per-user
 #   writable after one-time root mkdir+chown of /srv/eb-dev)
-#        /tmp/lmod-8.7.67-test               (sandbox trial, exactly what's done
-#                                            in CI/skill tests)
-# Vars overridable: LUA_VER LMOD_VER JOBS SOURCES_DIR KEEP_SOURCES
+#        /tmp/lmod-test-9.4                  (sandbox trial, proven 2026-10-22)
+# PROFILE=source (default) | PROFILE=distro (dnf hosts: LiSC Rocky 10, Fedora 44)
+# Vars overridable: PROFILE LUA_VER LR_VER TCL_VER BC_VER LMOD_VER LUAPOSIX_VER
+#   LFS_VER TCL_CFG_EXTRA TCL_EXTRA_CFLAGS DNF_PKGS LUA_BIN LUA_INC JOBS
+#   SOURCES_DIR KEEP_SOURCES
 # Pins are versioned facts, not floating: sha256 verified on every run; if a
 # mirror serves drifted or poisoned content, the script fails loudly at fetch,
 # not silently mid-install. NOTE about codeload: GitHub-generated tarballs are
@@ -22,33 +24,26 @@
 set -euo pipefail
 
 # Profiles:
-#     lua/tcl/Lmod all from source, root-free, sha-pinned per stage. For
-#     sandboxes/audit targets/anywhere without sudo.
-#   distro (design agreed 2026-10-22, NOT yet implemented) — dnf provisioning
-#     of lua + posix/lfs lua modules + tcl(+devel) + bc; Lmod still from
-#     source. Lmod 9.4's real gate (configure.ac:1013): lua 5.1..5.5 — the
-#     INSTALL file's "Lua 5.1 or 5.2 or 5.3" is stale el6-era doc, verified
-#     against the 9.4 tarball; 5.4 is squarely supported. luaposix >= 33;
-#     term module optional (HAVE_LUA_TERM=no is fine).
-#     Fedora 44 set (verified 2026-10-22): lua(5.4.8) lua-posix(36.3)
-#     lua-filesystem(1.8.0) tcl tcl-devel(9.0.2 == source pin) bc(1.08.2).
-#     tcl-devel drags pkgconfig(zlib) i.e. zlib-devel — the piece Lmod's tcl
-#     probe needs. Rocks come as RPMs; luarocks NOT required in this profile.
-#     Rocky 10 set (partial receipts): tcl 8.6.13-4.el10 BaseOS, already
-#     @System on login01 (user-verified 2026-10-22; plain tclsh, Lmod-accepted
-#     8.4+ range); lua AppStream 5.4.6 + luarocks EPEL 3.9.2 known. STILL
-#     PENDING one login01 dnf repoquery: lua-posix lua-filesystem tcl-devel
-#     bc (rock RPM names may differ from Fedora's).
-#     tcl decision: take DISTRO tcl in this profile — Lmod accepts any 8.4+
-#     (probes tclsh9.0/tclsh9/tclsh; fastTCLInterp optional anyway), and
-#     distro tcl links system zlib, killing the source-profile bundled-zlib
-#     traps wholesale. The source tcl/bc stages stay for zlib-devel-free
-#     hosts (test1) only. Lmod links distro lua via --with-luaBin=/usr/bin;
-#     rpm rocks land in /usr/share/lua/5.4 (distro package.path) → Lmod's
-#     baked SYS_LUA_PATH needs no env weaving.
-# Distro-profile context (Lmod configure hard-requirements): lua on PATH +
-# lua interpreter's posix + lfs modules (distro rpm or `luarocks install
-# luaposix luafilesystem`) + tclsh on PATH. Lmod checks all of these.
+#   source — lua/luarocks(rocks)/tcl/bc/Lmod ALL from source, root-free,
+#     sha-pinned per stage. For sandboxes/audit targets/anywhere without sudo
+#     (test1). Proven end-to-end 2026-10-22: Lmod 9.4 + module load smoke.
+#   distro — dnf provisioning of lua + posix/lfs lua modules + tcl(+devel) +
+#     bc; Lmod still built from source (pinned). Rocks come as RPMs:
+#     luarocks NOT needed. Lmod 9.4's real lua gate (configure.ac:1013):
+#     5.1..5.5 — the INSTALL file's "Lua 5.1 or 5.2 or 5.3" is stale el6-era
+#     doc; luaposix >= 33 required, `term` module optional.
+#     Unified package set, verified 2026-10-22 for both targets:
+#       Fedora 44:  lua(5.4.8) lua-posix(36.3) lua-filesystem(1.8.0)
+#                   tcl tcl-devel(9.0.2) bc(1.08.2)
+#       Rocky 10:   lua(5.4.6 AppStream) lua-posix(36.2.1-9.el10_1, EPEL)
+#                   lua-filesystem(1.8.0-14.el10_0, EPEL) tcl(8.6.13 BaseOS,
+#                   @System) tcl-devel(8.6.13) bc(1.07.1-23.el10)
+#                   (Rocky 10 receipts user-verified on login01 2026-10-22)
+#     tcl decision: DISTRO tcl here — Lmod accepts any 8.4+ (probes
+#     tclsh9.0/tclsh9/tclsh; fastTCLInterp optional). Distro tcl links system
+#     zlib and tcl-devel drags pkgconfig(zlib), killing the source-profile
+#     bundled-zlib traps wholesale. Source tcl/bc stages stay for
+#     zlib-devel-free hosts only.
 PROFILE="${PROFILE:-source}"
 
 LUA_VER="${LUA_VER:-5.4.8}"
@@ -106,12 +101,29 @@ fetch() {
     echo "${sha}  ${out}" | sha256sum -c - >/dev/null && echo "   sha256 OK"
 }
 
+# The dnf package set; same names on Fedora 44 and Rocky 10. Override for a
+# differently-organised distro (DNF_PKGS="..." lmod-bootstrap.sh ...).
+DNF_PKGS="${DNF_PKGS:-lua lua-posix lua-filesystem tcl tcl-devel bc}"
+
 stage() { echo; echo "===== $1 ====="; }
-for t in gcc make curl tar sha256sum unzip xz; do need "$t"; done
+for t in curl tar sha256sum; do need "$t"; done
 
 case "${PROFILE}" in
-    source) : ;;
-    *) echo "ERROR: PROFILE=${PROFILE} not implemented yet — sketched in TODO-3711c47c" >&2; exit 1 ;;
+    source) for t in gcc make unzip xz; do need "$t"; done ;;
+    distro)
+        for t in make pkg-config; do need "$t"; done
+        stage "distro profile — dnf provisioning: ${DNF_PKGS}"
+        need sudo
+        sudo dnf install -y ${DNF_PKGS}
+        # Assertions with receipts: every Lmod configure prerequisite, checked
+        # now so failures blame the package layer, not Lmod.
+        lua -e "require 'posix'; require 'posix.unistd'; require 'lfs'; print('lua modules OK (' .. _VERSION .. ')')"
+        for t in tclsh bc; do need "$t"; done
+        pkg-config --exists tcl  || { echo "ERROR: tcl.pc missing — tcl-devel landed?" >&2; exit 1; }
+        pkg-config --exists zlib || { echo "ERROR: zlib.pc missing — zlib-devel landed (via tcl-devel)?" >&2; exit 1; }
+        echo "tcl $(pkg-config --modversion tcl), zlib $(pkg-config --modversion zlib) — distro prerequisites OK"
+        ;;
+    *) echo "ERROR: unknown PROFILE=${PROFILE} (want: source|distro)" >&2; exit 1 ;;
 esac
 
 LUA_TARBALL="${SOURCES_DIR}/lua-${LUA_VER}.tar.gz"
@@ -119,15 +131,18 @@ LR_TARBALL="${SOURCES_DIR}/luarocks-${LR_VER}.tar.gz"
 TCL_TARBALL="${SOURCES_DIR}/tcl${TCL_VER}-src.tar.gz"
 BC_TARBALL="${SOURCES_DIR}/bc-${BC_VER}.tar.xz"
 LMOD_TARBALL="${SOURCES_DIR}/Lmod-${LMOD_VER}.tar.gz"
-fetch "${LUA_URL}"  "${LUA_TARBALL}"  "${LUA_SHA}"
-fetch "${LR_URL}"   "${LR_TARBALL}"   "${LR_SHA}"
-fetch "${TCL_URL}"  "${TCL_TARBALL}"  "${TCL_SHA}"
-fetch "${BC_URL}"   "${BC_TARBALL}"   "${BC_SHA}"
+if [ "${PROFILE}" = "source" ]; then
+    fetch "${LUA_URL}"  "${LUA_TARBALL}"  "${LUA_SHA}"
+    fetch "${LR_URL}"   "${LR_TARBALL}"   "${LR_SHA}"
+    fetch "${TCL_URL}"  "${TCL_TARBALL}"  "${TCL_SHA}"
+    fetch "${BC_URL}"   "${BC_TARBALL}"   "${BC_SHA}"
+fi
 fetch "${LMOD_URL}" "${LMOD_TARBALL}" "${LMOD_SHA}"
 
 BUILD_DIR="$(mktemp -d /tmp/lmod-bootstrap.XXXXXX)"
 cd "${BUILD_DIR}"
 
+if [ "${PROFILE}" = "source" ]; then
 # 'linux' target: POSIX + dlopen without readline (io.popen for luarocks,
 # loadlib for lfs.so). 'generic' is an ANSI build and starves both.
 stage "lua ${LUA_VER}"
@@ -191,22 +206,34 @@ BC_SRC=$(ls -d bc-*/ | head -1)
 )
 export PATH="${PREFIX}/bc-${BC_VER}/bin:${PATH}"
 "${PREFIX}/bc-${BC_VER}/bin/bc" --version | head -1
+fi # PROFILE=source chain
 
 stage "Lmod ${LMOD_VER}"
 tar -xf "${LMOD_TARBALL}"
 LMOD_SRC=$(ls -d Lmod-*/ | head -1)
-# TCL_INCLUDE/TCL_LIBS explicit: our tcl.pc declares Requires.private: zlib
-# (bundled-zlib build), so Lmod's pkg-config probe errors out and its
-# fallback loop never searches this prefix. -ltcl alone suffices: the zlib
-# objects live inside libtcl9.0.so; rpath covers runtime resolution.
 # Lmod appends its own lmod/<version> under --prefix; passing the full
 # lmod/<ver> path DOUBLES the layout (<p>/lmod/9.4/lmod/9.4) and breaks INIT.
+if [ "${PROFILE}" = "distro" ]; then
+    # distro tcl(+devel): pkg-config resolves tcl.pc + zlib.pc natively;
+    # nothing to force. LUA_BIN/LUA_INC overridable for shim-harness tests.
+    LUA_BIN="${LUA_BIN:-/usr/bin}"
+    LUA_INC="${LUA_INC:-/usr/include}"
+    LMOD_TCL_KV=()
+else
+    # TCL_INCLUDE/TCL_LIBS explicit: our tcl.pc declares Requires.private:
+    # zlib (bundled-zlib build), so Lmod's pkg-config probe errors out and
+    # its fallback loop never searches this prefix. -ltcl alone suffices:
+    # the zlib objects live inside libtcl9.0.so; rpath covers runtime.
+    LUA_BIN="${LUA_BIN:-${PREFIX}/lua-${LUA_VER}/bin}"
+    LUA_INC="${LUA_INC:-${PREFIX}/lua-${LUA_VER}/include}"
+    LMOD_TCL_KV=( "TCL_INCLUDE=-I${PREFIX}/tcl-${TCL_VER}/include" \
+                  "TCL_LIBS=-L${PREFIX}/tcl-${TCL_VER}/lib -Wl,-rpath,${PREFIX}/tcl-${TCL_VER}/lib -ltcl${TCL_VER%.*}" )
+fi
 ./"${LMOD_SRC}"configure \
     --prefix="${PREFIX}" \
-    --with-luaBin="${PREFIX}/lua-${LUA_VER}/bin" \
-    --with-luaInc="${PREFIX}/lua-${LUA_VER}/include" \
-    TCL_INCLUDE="-I${PREFIX}/tcl-${TCL_VER}/include" \
-    TCL_LIBS="-L${PREFIX}/tcl-${TCL_VER}/lib -Wl,-rpath,${PREFIX}/tcl-${TCL_VER}/lib -ltcl${TCL_VER%.*}"
+    --with-luaBin="${LUA_BIN}" \
+    --with-luaInc="${LUA_INC}" \
+    "${LMOD_TCL_KV[@]}"
 # Lmod's configure writes the Makefile into the CWD it was invoked from
 # (BUILD_DIR here), not into the source dir — so make WITHOUT -C.
 make -j"${JOBS}"
