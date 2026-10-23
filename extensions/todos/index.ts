@@ -9,6 +9,9 @@
  *
  * Tools:
  * - todo: list, list-all, get, create, update, append, delete, claim, release
+ *
+ * Status vocabulary (write surface): open | in_progress | done. Reads stay
+ * tolerant — legacy statuses in existing files still parse and sort.
  */
 
 import {
@@ -53,6 +56,9 @@ const DEFAULT_TODO_SETTINGS = {
 	gcDays: 7,
 };
 const LOCK_TTL_MS = 30 * 60 * 1000;
+
+const TODO_STATUSES = ["open", "in_progress", "done"] as const;
+type TodoStatus = (typeof TODO_STATUSES)[number];
 
 interface TodoFrontMatter {
 	id: string;
@@ -99,7 +105,11 @@ const TodoParams = Type.Object({
 		Type.String({ description: "Todo id (TODO-<hex> or raw hex filename)" }),
 	),
 	title: Type.Optional(Type.String({ description: "Short summary shown in lists" })),
-	status: Type.Optional(Type.String({ description: "Todo status" })),
+	status: Type.Optional(
+		StringEnum([...TODO_STATUSES], {
+			description: "Todo status: open (not started/parked), in_progress (actively worked), done (terminal: completed, concluded, or abandoned — nuance goes in the body or a tag)",
+		}),
+	),
 	tags: Type.Optional(Type.Array(Type.String({ description: "Todo tag" }))),
 	body: Type.Optional(
 		Type.String({ description: "Long-form details (markdown). Update replaces; append adds." }),
@@ -775,7 +785,7 @@ async function appendTodoBody(filePath: string, todo: TodoRecord, text: string):
 async function updateTodoStatus(
 	todosDir: string,
 	id: string,
-	status: string,
+	status: TodoStatus,
 	ctx: ExtensionContext,
 ): Promise<TodoRecord | { error: string }> {
 	const validated = validateTodoId(id);
@@ -1914,7 +1924,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 						return "stay";
 					}
 
-					const nextStatus = action === "close" ? "closed" : "open";
+					const nextStatus: TodoStatus = action === "close" ? "done" : "open";
 					const result = await updateTodoStatus(todosDir, record.id, nextStatus, ctx);
 					if ("error" in result) {
 						ctx.ui.notify(result.error, "error");
