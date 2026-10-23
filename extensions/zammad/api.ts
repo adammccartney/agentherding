@@ -140,6 +140,7 @@ export interface TicketDetail {
 	state: string;
 	group: string;
 	requester: string;
+	tags: string[];
 	articles: number;
 	created_at: string;
 	updated_at: string;
@@ -147,11 +148,18 @@ export interface TicketDetail {
 	last_contact_at: string;
 }
 
+async function ticketTags(cfg: ZammadConfig, id: number, signal?: AbortSignal): Promise<string[]> {
+	const res = await zmGet(cfg, "/tags", { object: "Ticket", o_id: String(id) }, signal);
+	return res?.tags ?? [];
+}
+
 export async function getTicketByNumber(cfg: ZammadConfig, number: string, signal?: AbortSignal): Promise<TicketDetail> {
 	const { ticket: t, assets } = await findTicketByNumber(cfg, number, signal);
 	const row = await ticketToRow(cfg, t, assets, signal);
+	const tags = await ticketTags(cfg, t.id, signal);
 	return {
 		...row,
+		tags,
 		created_at: t.created_at ?? "",
 		first_response_at: t.first_response_at ?? "",
 		last_contact_at: t.last_contact_at ?? "",
@@ -199,6 +207,7 @@ export interface ArticleOut {
 export interface ThreadResult {
 	number: string;
 	title: string;
+	tags: string[];
 	total: number;
 	shown: number;
 	omitted: number;
@@ -236,9 +245,11 @@ export async function getArticles(cfg: ZammadConfig, number: string, max: number
 			text,
 		});
 	}
+	const tags = await ticketTags(cfg, ticket.id, signal);
 	return {
 		number: String(ticket.number),
 		title: ticket.title ?? "",
+		tags,
 		total,
 		shown: articles.length,
 		omitted,

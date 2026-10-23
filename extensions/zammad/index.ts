@@ -35,6 +35,7 @@ const TicketDetailSchema = Type.Object({
 	state: Type.String(),
 	group: Type.String(),
 	requester: Type.String(),
+	tags: Type.Array(Type.String()),
 	articles: Type.Number(),
 	created_at: Type.String(),
 	updated_at: Type.String(),
@@ -45,6 +46,7 @@ const TicketDetailSchema = Type.Object({
 const ThreadSchema = Type.Object({
 	number: Type.String(),
 	title: Type.String(),
+	tags: Type.Array(Type.String()),
 	total: Type.Number(),
 	shown: Type.Number(),
 	omitted: Type.Number(),
@@ -103,7 +105,7 @@ export default function (pi: ExtensionAPI) {
 		description: `Read-only access to the ASC Zammad ticket system (support.vsc.ac.at).
 
 Actions:
-- search: full-text ticket search. Query syntax: 'field:value AND term', e.g. 'state.name:closed AND tensorflow'. Useful fields: state.name (new/open/closed), group.name, number, title, article.body. Returns <number, title, state, group, requester, updated, article count> rows.
+- search: full-text ticket search. Query syntax: 'field:value AND term', e.g. 'state.name:closed AND tensorflow'. Useful fields: state.name (new/open/closed), group.name (quote multi-word names: group.name:"software package"), tags:<name>, number, title, article.body. Returns <number, title, state, group, requester, updated, article count> rows. Tags are not shown in rows — use get on a ticket for its tags.
 - get: one ticket's metadata by public number (from the [Ticket#NNN] mail subject). No conversation content.
 - articles: one ticket's conversation by public number: sender type, date, plain text (HTML stripped). Long threads return the first 2 and last articles; 'omitted' in the output tells you how many were skipped — call again with a higher maxArticles to widen the window.
 
@@ -150,7 +152,7 @@ Typical triage flow: get the ticket, read its articles, then search similar clos
 						const t = await getTicketByNumber(cfg, number, signal);
 						const text = [
 							`#${t.number} — ${t.title}`,
-							`state: ${t.state} · group: ${t.group} · requester: ${t.requester}`,
+							`state: ${t.state} · group: ${t.group} · requester: ${t.requester}${t.tags.length ? ` · tags: ${t.tags.join(", ")}` : ""}`,
 							`articles: ${t.articles} · created: ${t.created_at.slice(0, 10)} · updated: ${t.updated_at.slice(0, 10)}`,
 							'Use action "articles" with this number to read the conversation.',
 						].join("\n");
@@ -166,7 +168,7 @@ Typical triage flow: get the ticket, read its articles, then search similar clos
 						const max = params.maxArticles ?? DEFAULT_MAX_ARTICLES;
 						const thread = await getArticles(cfg, number, max, signal);
 						const parts = [
-							`#${thread.number} — ${thread.title} — ${thread.total} article(s), showing ${thread.shown}${thread.omitted ? `, ${thread.omitted} omitted` : ""}`,
+							`#${thread.number} — ${thread.title} — ${thread.total} article(s), showing ${thread.shown}${thread.omitted ? `, ${thread.omitted} omitted` : ""}${thread.tags.length ? ` · tags: ${thread.tags.join(", ")}` : ""}`,
 						];
 						for (const a of thread.articles) {
 							parts.push(`---\n### ${a.at.replace("T", " ").slice(0, 16)} · ${a.sender} · ${a.from}\n${a.text}`);
