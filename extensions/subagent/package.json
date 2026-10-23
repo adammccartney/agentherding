@@ -1,0 +1,7 @@
+{
+  "name": "subagent",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

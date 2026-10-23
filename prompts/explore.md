@@ -12,6 +12,10 @@ and await my approval.
 - Being in ${2:-the current repo}. Check its AGENTS.md and .pi/todos/ first:
   reuse prior arcs, preserve negative results.
 - Read the real code, not assumptions; follow the import cone.
+- Wide recon (multiple repos, large trees, upstream surveys): delegate to the
+  `scout` subagent via the subagent tool, single mode. Pass the whole goal and
+  constraints; expect compressed findings in this same format, then continue
+  from step 1 with your own verification. Serial reading is for narrow recon.
 
 ## Do
 1. **Verified facts first** - what is true (patch, call sites, existing precedents),
