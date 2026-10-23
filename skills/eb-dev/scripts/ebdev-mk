@@ -1,0 +1,106 @@
+#!/bin/bash
+# ebdev-mk — scaffold a per-task EasyBuild development environment
+# (pi skill "eb-dev", deliverable)
+#
+# Layout contract (decided 2026-10-22, TODO-3711c47c; re-cast same day on
+# FHS grounds — workspaces are a USER's local working data, not served data,
+# so /srv was wrong; mirrors the slurm pattern: build envs in home, installs
+# in /opt):
+#   sandbox/VM : $HOME/eb-dev/<topic>/         zero admin; OUTSIDE the synced/
+#                                              mounted paths (~/src incl.
+#                                              ~/src/sandbox, ~/agent-context)
+#   cluster    : ${SCRATCH}/EasyBuild-<topic>/ (live LiSC convention)
+#   override   : EBDEV_BASE=<dir> ebdev-mk <topic>   (e.g. /var/tmp/eb-dev;
+#                 systemd-tmpfiles 30d reaping on el/Fedora applies there)
+#
+# Envs are short-lived and single-purpose: one topic, one owner, receipts
+# under logs/. Refuse to clobber an existing env — reuse is a decision the
+# operator must make aloud (rm -rf first).
+#
+# Usage:  ebdev-mk <topic>            # $HOME/eb-dev/<topic>
+#         EBDEV_BASE="$SCRATCH" ebdev-mk <topic>   # cluster layout
+
+set -euo pipefail
+
+TOPIC="${1:?usage: ebdev-mk <topic>   # e.g. fftw, icon, vasp-6.6.1}"
+BASE="${EBDEV_BASE:-$HOME/eb-dev}"
+
+# naming rule: under an eb-dev root → plain <topic>; elsewhere (cluster
+# scratch shared with other tools) → EasyBuild-<topic>
+case "$(basename "$BASE")" in
+    eb-dev) DIR="${BASE}/${TOPIC}" ;;
+    *)      DIR="${BASE}/EasyBuild-${TOPIC}" ;;
+esac
+
+if [ -e "${DIR}" ]; then
+    echo "ERROR: ${DIR} already exists — dev envs are single-purpose." >&2
+    echo "       remove it explicitly if reuse is the intent." >&2
+    exit 1
+fi
+
+mkdir -p "${DIR}"/{clones,sources,logs,venv,modules}
+
+cat > "${DIR}/modules/EasyBuild-develop" <<EOF
+#%Module
+set root    "${DIR}/clones"
+conflict    EasyBuild
+prepend-path    PATH            "\$root/easybuild-framework"
+prepend-path    PYTHONPATH      "\$root/easybuild-framework"
+prepend-path    PYTHONPATH      "\$root/easybuild-easyblocks"
+prepend-path    PYTHONPATH      "\$root/easybuild-easyconfigs"
+EOF
+
+cat > "${DIR}/activate" <<EOF
+# source to use this dev env in a fresh shell (agent bash calls are
+# non-persistent — source at the start of every command)
+export EBDEV_ENV="${DIR}"
+if [ -f /opt/lmod-toolchain/lmod/lmod/init/profile ]; then
+    . /opt/lmod-toolchain/lmod/lmod/init/profile
+elif ls /opt/lmod-toolchain/lmod/*/init/profile >/dev/null 2>&1; then
+    . "\$(ls -d /opt/lmod-toolchain/lmod/*/init/profile | head -1)"
+else
+    echo "ebdev: no lmod bootstrap found — run lmod-bootstrap.sh first" >&2
+fi
+module use "${DIR}/modules"
+module load EasyBuild-develop 2>/dev/null || true
+EOF
+
+cat > "${DIR}/README.md" <<EOF
+# EasyBuild dev env: ${TOPIC}
+
+Created $(date -u +%FT%TZ) by ebdev-mk (pi skill eb-dev).
+
+## Layout
+
+- clones/   easybuild-framework + easyblocks + easyconfigs (dev branches;
+            fill via the librarian --reference shortcut, see SKILL.md) —
+            plus room for ad-hoc clones. The modules/EasyBuild-develop file
+            points here by default.
+- venv/     EB_VENV (cluster-style run mode); stays empty on the sandbox
+- sources/  canonical vendoring mirror — every tarball sha256-stamped into
+            SHA256SUMS. NOTE: distinct from the "as-run" surface (what the
+            eb invocation actually consumed; from-pr/inject-checksums paths).
+            Do not conflate the two.
+- logs/     timestamped eb receipts (build/test/dry-run)
+- modules/  EasyBuild-develop modulefile (points at clones/)
+- activate  source this in every fresh shell on the sandbox
+
+Fork/PR variant: \`install-EasyBuild-develop.sh <github-user> \${DIR}\` clones
+the repos at the env ROOT instead (upstream layout) and refreshes the
+modulefile to point there. Last writer wins; do not mix in one env.
+
+## Run EB (sandbox)
+
+    source ${DIR}/activate && eb --version
+
+Scope in the sandbox: validation only — lint (style.py), easyconfigs test
+suite, \`eb --dry-run\` / \`--check-*\`. NEVER builds (builds go to the
+future build machine; agent has no remote access).
+
+Traps checklist: see SKILL.md in the eb-dev skill.
+EOF
+
+[ -f "${DIR}/sources/SHA256SUMS" ] || touch "${DIR}/sources/SHA256SUMS"
+
+echo "created ${DIR}"
+find "${DIR}" -maxdepth 1 -mindepth 1 | sort
