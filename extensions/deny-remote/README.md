@@ -7,7 +7,7 @@ sandbox**.
 | ---                                       | ---                                         |
 | `ssh`, `scp`, `sftp`, `mosh`, `sshfs`, `sshpass`, `ssh-copy-id` (any shell segment, incl. after `sudo`, env prefixes, pipes, `bash -c`) | `ssh-keygen`, `ssh-add`, `ssh-agent` (local key management) |
 | `rsync` with remote syntax (`host:path`, `-e ssh`) | `rsync` local-to-local                     |
-| `ansible` (ad-hoc — always remote), `ansible-playbook` without `--syntax-check` | `ansible-doc`, `ansible-lint`, `ansible-galaxy`, `ansible-playbook --syntax-check` |
+| `ansible` ad-hoc without `--list-*`, `ansible-playbook` without `--syntax-check`/`--list-*` (incl. `--check` — dry-run still connects) | `ansible-doc`, `ansible-lint`, `ansible-galaxy`, `ansible-playbook --syntax-check`/`--list-tasks`/`--list-hosts`/`--list-tags`, `ansible --list-hosts` |
 |                                           | `git` over ssh (transport, not remote exec) |
 
 Design note: remote access enters only through purpose-built tools — the

@@ -11,8 +11,8 @@
  *   ssh, scp, sftp, mosh, sshfs, sshpass, ssh-copy-id
  * Special cases:
  *   rsync with remote syntax (user@host:path, host:path, -e ssh)
- *   ansible            — ad-hoc commands are always remote: block
- *   ansible-playbook   — block unless --syntax-check (only offline form)
+ *   ansible            — block unless --list-* (inventory-only preview)
+ *   ansible-playbook   — block unless --syntax-check or --list-* (both offline)
  *   sh|bash -c "..."   — payload is inspected recursively
  * Local members of the ssh family (ssh-keygen, ssh-add, ssh-agent) are
  * different tokens and never match. git over ssh stays free: transport to a
@@ -89,11 +89,11 @@ export function findBlock(command: string, depth = 0): GuardHit | null {
 		if (word === "rsync" && (RSYNC_REMOTE.test(segment) || /\s-e\s+(['"]?)ssh\b/.test(segment))) {
 			return { fragment: segment.length > 60 ? segment.slice(0, 60) + "…" : segment, rule: "rsync remote" };
 		}
-		if (word === "ansible") {
-			return { fragment: segment.slice(0, 60), rule: "ansible ad-hoc (always remote)" };
+		if (word === "ansible" && !rest.some((a) => a.startsWith("--list-"))) {
+			return { fragment: segment.slice(0, 60), rule: "ansible ad-hoc (contacts hosts)" };
 		}
-		if (word === "ansible-playbook" && !rest.includes("--syntax-check")) {
-			return { fragment: segment.slice(0, 60), rule: "ansible-playbook without --syntax-check" };
+		if (word === "ansible-playbook" && !rest.includes("--syntax-check") && !rest.some((a) => a.startsWith("--list-"))) {
+			return { fragment: segment.slice(0, 60), rule: "ansible-playbook without --syntax-check/--list-*" };
 		}
 	}
 	return null;
