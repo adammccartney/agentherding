@@ -1,6 +1,6 @@
 ---
 name: eb-dev
-description: Bootstrap and use an EasyBuild development environment on HPC hosts (LiSC/MUSICA nodes, sandbox VMs). Scripted lua/luarocks/tcl/bc + Lmod bootstrap, per-task dev-env scaffolding, easyconfig work loop, and the site-specific traps (from-pr ordering, SYSTEM-filtered loads, EULA packages, host-image boost-devel, EESSI accel interplay). Use when authoring, validating, or testing EasyBuild recipes without EESSI's prebuilt lmod.
+description: Author and validate EasyBuild easyconfigs — per-task dev envs on an lmod-bootstrapped host (this sandbox included), style.py/test-suite/eb-parse validation loop, NO builds in the sandbox (builds go to the future build machine). Scripted lua/luarocks/tcl/bc + Lmod bootstrap, and the site-specific traps (from-pr ordering, SYSTEM-filtered loads, EULA packages, host-image boost-devel, EESSI accel interplay). Use when authoring, validating, or testing EasyBuild recipes without EESSI's prebuilt lmod.
 ---
 
 # eb-dev — EasyBuild development environments
@@ -8,12 +8,18 @@ description: Bootstrap and use an EasyBuild development environment on HPC hosts
 Stand up a repeatable EasyBuild dev environment on hosts that lack a
 site-provided lmod, then work recipes through the site-proven loop.
 
-The basic procedure is to run the `./scripts/install-EasyBuild-develop.sh`
-This script is a hard copy of the upstream
-<https://github.com/easybuilders/easybuild-framework/blob/main/easybuild/scripts/install-EasyBuild-develop.sh>
-There **may** be version drift between the local copy and upstream over time.
-We can periodically check for updates (once per new easybuild release), 
-and pull the new version if there are changes.
+## Sandbox scope
+
+Author and **validate** easyconfigs here: lint (style.py), the easyconfigs
+test suite, `eb --dry-run` / `--check-*`. **Never run builds in the
+sandbox** — builds belong to the (future) API-fronted build machine; the
+agent has no remote access (deny-remote policy).
+
+Provenance: `./scripts/install-EasyBuild-develop.sh` is a verbatim copy of
+upstream <https://github.com/easybuilders/easybuild-framework/blob/main/easybuild/scripts/install-EasyBuild-develop.sh>,
+re-synced 2026-10-23 from the librarian cache (upstream commit 136bfd14e)
+after an earlier HTML-page truncation was found and replaced. Drift check =
+the cache's fetch date. Use it only for the fork/PR flow (see scaffolding).
 
 ## Lmod bootstrap
 
@@ -22,7 +28,9 @@ luarocks(+luaposix, luafilesystem) → tcl → bc → Lmod, root-free,
 sha256-pinned per fetched tarball. Proven end-to-end 2026-10-22 on test1
 (Fedora 44 Cloud, no sudo, no zlib-devel): Lmod 9.4 green including
 `module load` smoke. Default prefix: `/opt/lmod-toolchain` — FHS
-add-on software area (the site's /opt-wide convention, cf. slurm)
+add-on software area (the site's /opt-wide convention, cf. slurm).
+test1 (this sandbox) is bootstrapped; the selector symlink
+`/opt/lmod-toolchain/lmod/lmod` → `9.4` is live.
 
 **.sources rule: always check the default path first** — before any fetch,
 look in `/opt/lmod-toolchain/.sources/` for the version-pinned tarball
@@ -87,33 +95,40 @@ Site traps the bootstrap dodges, each cost ≥1 trial; read script comments befo
 
 ## Dev-environment scaffolding
 
-
-The invocation of the development script is 
-
-`bash ~/scripts/install-EasyBuild-develop.sh <GITHUB_USER> <INSTALL_PREFIX>`
-
-The skill should ask for input about
-+ GITHUB_USER (this can be inferred from the github user of the remote `origin` of the repo
-  containing this SKILL.md). This inferral can take place during the installation of the skill
-  i.e. the skill in `~/.pi/skills` won't convey the required info. Ask the user if unsure.
-+ `<INSTALL_PREFIX>` is typically something like `EasyBuild-<topic>`
-  - sandbox/VM: `$HOME/eb-dev/EasyBuild-<topic>/` — zero admin; 
-    **never** under `~/src` (incl. the container-mounted `~/src/sandbox`) or
-    `~/agent-context` (both sync/mount). This is the same FHS re-cast as the
-    toolchain: workspaces are a user's local working data; `/srv` was wrong
-    there too (slurm pattern: build env in home, install in `/opt`).
-- machine-level installs that must span users stay overridable via `EBDEV_BASE` (e.g. `/var/tmp/eb-dev` — mind systemd-tmpfiles' 30-day reaping).
+1. Scaffold: `bash scripts/ebdev-mk <topic>` → `$HOME/eb-dev/<topic>/` with
+   `clones/ sources/ logs/ venv/ modules/`, an `EasyBuild-develop`
+   modulefile, and an `activate` file. Scripts live next to this SKILL.md
+   (never `~/scripts`). Env roots stay OUT of `~/src` (incl. the mounted
+   `~/src/sandbox`) and `~/agent-context`. Machine-level roots override via
+   `EBDEV_BASE` (e.g. `/var/tmp/eb-dev` — tmpfiles' 30-day reaping).
+2. Fill the repos — two paths, do not mix in one env:
+   a. validation (default, offline-friendly): clone into `<env>/clones/` with
+      local object reuse from the librarian cache:
+      `git clone --reference ~/.cache/checkouts/github.com/easybuilders/<r> git@github.com:easybuilders/<r>.git`
+      for r ∈ {easybuild-framework, easybuild-easyblocks, easybuild-easyconfigs}.
+   b. fork/PR flow: `bash scripts/install-EasyBuild-develop.sh <GITHUB_USER> <env>`
+      clones your forks (ssh) at the env ROOT and refreshes the modulefile.
+      GITHUB_USER: infer from origin's github user; ask if unsure.
+3. Activate in EVERY agent bash call (shells are non-persistent):
+   `source <env>/activate && eb --version`
 
 ## Running EB
 
-- **sandbox (ephemeral)**: `uvx --from 'easybuild==5.4.1' eb ...` — no install, pin explicit.
+- **sandbox (dev install, default)**: `source <env>/activate` → `eb ...` via the loaded EasyBuild-develop.
+- **sandbox (ephemeral, no env)**: `uvx --from 'easybuild==5.4.1' eb ...` — no install, pin explicit.
 
-## Recipe work loop
+## Recipe work loop (validation only — never builds)
 
-1. run the install script to clone the required repos (easybuild framework, easyconfigs, easyblocks — dev branches)
-2.
- + easybuild-easyconfigs/test/easyconfigs/style.py is the way to perform linting on easyconfigs
- + easybuild-easyconfigs/test/easyconfigs/suite.py will run the test suite
+1. Lint: `python <env>/clones/easybuild-easyconfigs/test/easyconfigs/style.py`
+   on the new/changed easyconfigs.
+2. Targeted suite: from the easyconfigs checkout,
+   `python -m test.easyconfigs.suite` — select the relevant tests; a full
+   run is slow.
+3. Parse/plan checks: `eb --dry-run <ec>`; `eb --check-*` variants as needed.
+4. Codemode: drive runs from a codemode script and return only the failing
+   step + error lines — the suite prints thousands of lines.
+
+Builds (`eb <ec>`) never happen here; they go to the future build machine.
 
 ## Ledger habit
 
