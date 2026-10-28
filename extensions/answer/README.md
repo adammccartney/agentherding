@@ -58,15 +58,18 @@ Upstream's hardcoded codex/haiku shortlist is replaced by a policy ladder
 over the model registry, resolved per invocation so roster churn degrades
 gracefully:
 
-1. enumerate the registry's models and score them — ids matching
-   `exp|experimental` score out; a parameter size parsed from the id (the
-   `\d+b` suffix) in the 20–40B band scores up; a `-vllm`-suffixed twin
-   scores highest within the band; ties break toward the larger parsed
-   size (measured tie-break: the smaller band candidate burned 96% of its
-   budget on reasoning tokens);
-2. walk the ranking and take the first model whose credentials resolve via
+1. take the registry's *available* models (providers whose credentials
+   work in this process) intersected with `hasConfiguredAuth` (auth declared
+   in user configuration) — catalog models from unconfigured providers can
+   pass a bare auth probe yet fail at call time;
+2. score the pool: ids matching `exp|experimental` score out; a parameter
+   size parsed from the id (the `\d+b` suffix) in the 20–40B band scores up;
+   a `-vllm`-suffixed twin scores highest within the band; ties break toward
+   the larger parsed size (measured tie-break: the smaller band candidate
+   burned 96% of its budget on reasoning tokens);
+3. walk the ranking and take the first model whose credentials resolve via
    the registry's request-time auth;
-3. fall back to the current model when no candidate qualifies.
+4. fall back to the current model when no candidate qualifies.
 
 The side call itself runs through the registry's `complete` with
 request-time auth, `cacheRetention: "none"`, and a fresh session id.

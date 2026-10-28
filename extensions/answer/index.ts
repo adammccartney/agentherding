@@ -120,12 +120,19 @@ export function rankExtractionCandidates(models: Model<Api>[], current: Model<Ap
 /**
  * Pick the best-ranked extraction model whose credentials actually resolve;
  * fall back to the current model when no candidate is usable.
+ *
+ * The candidate pool is getAvailable() (providers with working credentials
+ * in this process) intersected with hasConfiguredAuth (auth declared in
+ * user config) — ranking over getAll() instead scores the bundled models.dev
+ * catalog, where anonymous catalog endpoints pass the auth check below only
+ * to fail at call time with "Provider is not configured: <provider>".
  */
 export async function selectExtractionModel(
 	currentModel: Model<Api>,
 	modelRegistry: ModelRegistry,
 ): Promise<Model<Api>> {
-	for (const candidate of rankExtractionCandidates(modelRegistry.getAll(), currentModel)) {
+	const pool = modelRegistry.getAvailable().filter((m) => modelRegistry.hasConfiguredAuth(m));
+	for (const candidate of rankExtractionCandidates(pool, currentModel)) {
 		try {
 			const auth = await modelRegistry.getApiKeyAndHeaders(candidate);
 			if (auth.ok) {
