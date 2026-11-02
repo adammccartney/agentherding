@@ -1,18 +1,417 @@
-#!/usr/bin/env bash
-#
-# zt — read-only Zammad CLI for support.vsc.ac.at (standalone, no pi)
-#
-# Usage: ./bin/zt <search|get|articles> [args] [--json]
-#        ./bin/zt --help
-#
-# Wraps extensions/zammad/cli.ts via node's type stripping (node >= 22).
-# Auth: see extensions/zammad/README.md (~/.config/zammad/token,
-# overrides ZAMMAD_BASE_URL / ZAMMAD_TOKEN_FILE).
-#
+#!/usr/bin/env python3
+"""zt — read-only Zammad CLI for support.vsc.ac.at (standalone, no pi, no node).
 
-set -euo pipefail
+Usage: zt <search|get|articles> [args] [--json]
+       zt --help
 
-# Resolve this script's own directory (repo root is its parent), portably
-BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+Stdlib-only python3 re-implementation of the pi zammad extension's behavior
+(config resolution, output caps, rendering). The TS core in
+extensions/zammad/api.ts stays with the pi extension until pi retires; this
+file is the Prospero-era CLI. Keep the two sides pinned: --json output
+shapes, text rendering, exit codes — see tests/zt_test.py and the parity
+note in .pi/todos/9c0c89c5.md.
 
-exec node --experimental-strip-types "$BIN_DIR/../extensions/zammad/cli.ts" "$@"
+Auth: token at ~/.config/zammad/token (mode 0600); overrides via
+ZAMMAD_TOKEN_FILE and ZAMMAD_BASE_URL. GET-only. The token never appears in
+any output. Exit codes: 0 ok, 1 runtime error, 2 usage error.
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_BASE_URL = "https://support.vsc.ac.at"
+DEFAULT_TOKEN_FILE = os.path.expanduser(os.path.join("~", ".config", "zammad", "token"))
+DEFAULT_SEARCH_LIMIT = 5
+DEFAULT_MAX_ARTICLES = 8
+PER_ARTICLE_CHAR_CAP = 4000
+
+USAGE = f"""Usage: zt <verb> [args] [--json]
+
+Read-only CLI for the ASC Zammad ticket system (support.vsc.ac.at).
+
+Verbs:
+  search <query> [--limit N]            full-text ticket search (default limit {DEFAULT_SEARCH_LIMIT})
+  get <number>                          one ticket's metadata by public number
+  articles <number> [--max-articles N]  ticket conversation (default {DEFAULT_MAX_ARTICLES};
+                                        long threads keep the first 2 and last N-2 articles)
+
+Options:
+  --json    print the structured result object as JSON instead of text
+  --help    show this usage
+
+Auth: token at ~/.config/zammad/token (mode 0600); overrides via
+ZAMMAD_BASE_URL and ZAMMAD_TOKEN_FILE. See extensions/zammad/README.md."""
+
+
+class ZtError(Exception):
+    """Runtime failure: reported as 'Error: <msg>' on stderr, exit 1."""
+
+
+def usage_error(msg=None):
+    if msg:
+        sys.stderr.write(f"Error: {msg}\n\n")
+    sys.stderr.write(f"{USAGE}\n")
+    sys.exit(2)
+
+
+def positive_int(flag, raw, fallback):
+    if raw is None:
+        return fallback
+    if not re.fullmatch(r"\d+", raw) or int(raw) < 1:
+        usage_error(f'{flag} expects a positive integer, got "{raw}".')
+    return int(raw)
+
+
+# ---------------------------------------------------------------------------
+# Config — mirrors loadConfig() in extensions/zammad/api.ts.
+
+def load_config():
+    token_file = os.environ.get("ZAMMAD_TOKEN_FILE") or DEFAULT_TOKEN_FILE
+    try:
+        with open(token_file, "r", encoding="utf-8") as fh:
+            token = fh.read().strip()
+    except OSError:
+        raise ZtError(
+            f"Zammad token not readable at {token_file} — store the token there (chmod 600)."
+        )
+    if not token:
+        raise ZtError(f"Zammad token file {token_file} is empty.")
+    base_url = re.sub(r"/+$", "", os.environ.get("ZAMMAD_BASE_URL") or DEFAULT_BASE_URL)
+    return {"base_url": base_url, "token": token}
+
+
+# ---------------------------------------------------------------------------
+# Low-level GET — mirrors zmGet().
+
+def zm_get(cfg, api_path, params=None):
+    url = f"{cfg['base_url']}/api/v1{api_path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Token token={cfg['token']}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as res:
+            return json.load(res)
+    except urllib.error.HTTPError as err:
+        try:
+            body = err.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            body = ""
+        raise ZtError(f"Zammad GET {api_path} failed: HTTP {err.code} {body}".strip())
+
+
+# ---------------------------------------------------------------------------
+# Asset resolution — mirrors assetName/userName/stateName/ticketToRow.
+
+def asset_name(assets, kind, ident):
+    entry = assets.get(kind, {}).get(str(ident)) if ident is not None else None
+    if entry and entry.get("name"):
+        return entry["name"]
+    return f"{kind}#{ident}" if ident is not None else ""
+
+
+def user_name(u):
+    if not u:
+        return ""
+    if u.get("name"):
+        return u["name"]
+    first = (u.get("firstname") or "").strip()
+    last = (u.get("lastname") or "").strip()
+    # LDAP-fed accounts sometimes carry the full name in both fields.
+    if first and first == last:
+        return first
+    return f"{first} {last}".strip() or u.get("login") or ""
+
+
+# Search assets carry Group/User but not TicketState — fetch the state list
+# once per process.
+_state_cache = None
+
+def state_name(cfg, ident):
+    global _state_cache
+    if ident is None:
+        return ""
+    if _state_cache is None:
+        _state_cache = {}
+        for s in zm_get(cfg, "/ticket_states"):
+            _state_cache[str(s["id"])] = s.get("name") or str(s["id"])
+    return _state_cache.get(str(ident), f"state#{ident}")
+
+
+def ticket_to_row(cfg, t, assets):
+    return {
+        "number": str(t["number"]),
+        "title": t.get("title") or "",
+        "state": state_name(cfg, t.get("state_id")),
+        "group": asset_name(assets, "Group", t.get("group_id")),
+        "requester": user_name((assets.get("User") or {}).get(str(t.get("customer_id"))))
+        or f"user#{t.get('customer_id')}",
+        "updated_at": t.get("updated_at") or "",
+        "articles": t.get("article_count") if t.get("article_count") is not None else 0,
+    }
+
+
+def find_ticket_by_number(cfg, number):
+    clean = re.sub(r"^#", "", str(number)).strip()
+    res = zm_get(cfg, "/tickets/search", {"query": f"number:{clean}", "limit": "5"})
+    for ident in res.get("tickets") or []:
+        t = (res.get("assets", {}).get("Ticket") or {}).get(str(ident))
+        if t and str(t["number"]) == clean:
+            return {"ticket": t, "assets": res.get("assets") or {}}
+    raise ZtError(f"No ticket with number {clean}.")
+
+
+# ---------------------------------------------------------------------------
+# Actions — search / get / articles.
+
+def search_tickets(cfg, query, limit):
+    res = zm_get(cfg, "/tickets/search", {"query": query, "limit": str(limit)})
+    assets = res.get("assets") or {}
+    rows = []
+    for ident in (res.get("tickets") or [])[:limit]:
+        t = (assets.get("Ticket") or {}).get(str(ident))
+        if t:
+            rows.append(ticket_to_row(cfg, t, assets))
+    total = res.get("tickets_count")
+    return {"rows": rows, "total": total if total is not None else len(rows)}
+
+
+def ticket_tags(cfg, ident):
+    res = zm_get(cfg, "/tags", {"object": "Ticket", "o_id": str(ident)})
+    return (res or {}).get("tags") or []
+
+
+def get_ticket_by_number(cfg, number):
+    found = find_ticket_by_number(cfg, number)
+    t, assets = found["ticket"], found["assets"]
+    row = ticket_to_row(cfg, t, assets)
+    row["tags"] = ticket_tags(cfg, t["id"])
+    row["created_at"] = t.get("created_at") or ""
+    row["first_response_at"] = t.get("first_response_at") or ""
+    row["last_contact_at"] = t.get("last_contact_at") or ""
+    return row
+
+
+SENDER = {1: "customer", 2: "agent", 3: "system"}
+
+
+def html_to_text(html):
+    if not html:
+        return ""
+    s = html
+    # drop non-content blocks entirely
+    s = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", s, flags=re.I | re.S)
+    # line structure
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"<li[^>]*>", "\n- ", s, flags=re.I)
+    s = re.sub(r"</(p|div|tr|table|h[1-6]|blockquote|ul|ol)>", "\n", s, flags=re.I)
+    # everything else: tags out
+    s = re.sub(r"<[^>]+>", "", s)
+    # entities, same order as the TS pipeline
+    s = re.sub(r"&nbsp;", " ", s, flags=re.I)
+    s = re.sub(r"&amp;", "&", s, flags=re.I)
+    s = re.sub(r"&lt;", "<", s, flags=re.I)
+    s = re.sub(r"&gt;", ">", s, flags=re.I)
+    s = re.sub(r"&quot;", '"', s, flags=re.I)
+    s = re.sub(r"&(apos|#39);", "'", s, flags=re.I)
+    s = re.sub(r"&#x([0-9a-f]+);", lambda m: chr(int(m.group(1), 16)), s, flags=re.I)
+    s = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), s)
+    # tidy whitespace
+    s = "\n".join(re.sub(r"[ \t]+$", "", line) for line in s.split("\n"))
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def get_articles(cfg, number, maximum):
+    found = find_ticket_by_number(cfg, number)
+    ticket = found["ticket"]
+    raw = zm_get(cfg, f"/ticket_articles/by_ticket/{ticket['id']}")
+    total = len(raw)
+    keep_first = min(2, maximum, total)
+    keep_last = maximum - keep_first
+    chosen = raw if total <= maximum else raw[:keep_first] + raw[total - keep_last:]
+    omitted = total - len(chosen)
+    notes = []
+    if omitted > 0:
+        notes.append(
+            f"{omitted} middle article(s) omitted (kept first {keep_first} and last {keep_last})."
+        )
+    articles = []
+    seen = set()
+    for a in chosen:
+        if a["id"] in seen:
+            continue
+        seen.add(a["id"])
+        text = html_to_text(a.get("body") or "")
+        if len(text) > PER_ARTICLE_CHAR_CAP:
+            text = text[:PER_ARTICLE_CHAR_CAP] + " … [article truncated]"
+            if not any("capped" in n for n in notes):
+                notes.append(f"Long articles capped at {PER_ARTICLE_CHAR_CAP} chars.")
+        articles.append(
+            {
+                "at": a.get("created_at") or "",
+                "from": a.get("from") or "",
+                "sender": SENDER.get(a.get("sender_id"), f"sender_id {a.get('sender_id')}"),
+                "text": text,
+            }
+        )
+    return {
+        "number": str(ticket["number"]),
+        "title": ticket.get("title") or "",
+        "tags": ticket_tags(cfg, ticket["id"]),
+        "total": total,
+        "shown": len(articles),
+        "omitted": omitted,
+        "articles": articles,
+        "notes": notes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rendering + verb dispatch — mirrors cli.ts exactly.
+
+
+def print_json(value):
+    sys.stdout.write(f"{json.dumps(value, indent=2, ensure_ascii=False)}\n")
+
+
+def cmd_search(cfg, positional, opts, as_json):
+    query = positional[1] if len(positional) > 1 else None
+    if not query or not query.strip():
+        usage_error('search requires a <query>, e.g. zt search "state.name:closed AND pytorch".')
+    only_opts(opts, positional, "search", "--limit")
+    limit = positive_int("--limit", opts.get("--limit"), DEFAULT_SEARCH_LIMIT)
+    result = search_tickets(cfg, query, limit)
+    if as_json:
+        print_json({"tickets": result["rows"], "total": result["total"]})
+        return
+    rows = result["rows"]
+    if not rows:
+        sys.stdout.write(f'No tickets found for query "{query}".\n')
+        return
+    lines = [
+        f'## Ticket search — "{query}" ({result["total"]} hit(s), showing {len(rows)})',
+        "",
+        "| number | title | state | group | requester | updated | arts |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['number']} | {r['title']} | {r['state']} | {r['group']} "
+            f"| {r['requester']} | {r['updated_at'][:10]} | {r['articles']} |"
+        )
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_get(cfg, positional, opts, as_json):
+    number = positional[1] if len(positional) > 1 else None
+    if not number or not number.strip():
+        usage_error("get requires a <number>, e.g. zt get 206540.")
+    only_opts(opts, positional, "get")
+    t = get_ticket_by_number(cfg, number)
+    if as_json:
+        print_json({"ticket": t})
+        return
+    tags = f" · tags: {', '.join(t['tags'])}" if t["tags"] else ""
+    lines = [
+        f"#{t['number']} — {t['title']}",
+        f"state: {t['state']} · group: {t['group']} · requester: {t['requester']}{tags}",
+        f"articles: {t['articles']} · created: {t['created_at'][:10]} · updated: {t['updated_at'][:10]}",
+        'Use action "articles" with this number to read the conversation.',
+    ]
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_articles(cfg, positional, opts, as_json):
+    number = positional[1] if len(positional) > 1 else None
+    if not number or not number.strip():
+        usage_error("articles requires a <number>, e.g. zt articles 206540.")
+    only_opts(opts, positional, "articles", "--max-articles")
+    maximum = positive_int("--max-articles", opts.get("--max-articles"), DEFAULT_MAX_ARTICLES)
+    thread = get_articles(cfg, number, maximum)
+    if as_json:
+        print_json({"thread": thread})
+        return
+    header = (
+        f"#{thread['number']} — {thread['title']} — {thread['total']} article(s), "
+        f"showing {thread['shown']}"
+    )
+    if thread["omitted"]:
+        header += f", {thread['omitted']} omitted"
+    if thread["tags"]:
+        header += f" · tags: {', '.join(thread['tags'])}"
+    parts = [header]
+    for a in thread["articles"]:
+        parts.append(f"---\n### {a['at'].replace('T', ' ')[:16]} · {a['sender']} · {a['from']}\n{a['text']}")
+    for note in thread["notes"]:
+        parts.append(f"[note: {note}]")
+    sys.stdout.write("\n".join(parts) + "\n")
+
+
+def only_opts(opts, positional, verb, *allowed):
+    for k in opts:
+        if k not in allowed:
+            usage_error(f'option {k} does not apply to "{verb}".')
+    if len(positional) > 2:
+        usage_error(f'unexpected extra argument "{positional[2]}".')
+
+
+def main(argv):
+    # Flag scan happens before config load, as in cli.ts: --help and unknown
+    # options exit without touching the token file; verb-level validation
+    # happens after load_config().
+    as_json = False
+    positional = []
+    opts = {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            as_json = True
+        elif a in ("--help", "-h"):
+            sys.stdout.write(f"{USAGE}\n")
+            sys.exit(0)
+        elif a in ("--limit", "--max-articles"):
+            i += 1
+            if i >= len(argv):
+                usage_error(f"option {a} expects a value.")
+            opts[a] = argv[i]
+        elif a.startswith("--"):
+            usage_error(f'unknown option "{a}".')
+        else:
+            positional.append(a)
+        i += 1
+
+    cfg = load_config()
+    verb = positional[0] if positional else None
+    if verb == "search":
+        cmd_search(cfg, positional, opts, as_json)
+    elif verb == "get":
+        cmd_get(cfg, positional, opts, as_json)
+    elif verb == "articles":
+        cmd_articles(cfg, positional, opts, as_json)
+    elif verb is None:
+        usage_error()
+    else:
+        usage_error(f'unknown verb "{verb}" — use "search", "get", or "articles".')
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except ZtError as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)

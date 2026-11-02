@@ -27,3 +27,6 @@ needs.
 ```sh
 node test-api.ts   # scratch script, not shipped
 ```
+
+The Prospero-era CLI lives at `bin/zt` (stdlib python3; suite: `tests/zt_test.py`) —
+`api.ts` here serves the pi extension only.
