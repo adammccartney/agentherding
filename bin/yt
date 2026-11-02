@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# yt — standalone read-only YouTrack CLI (no pi required)
+#
+# Usage: ./bin/yt <verb> [args] [--json]
+#
+# Verbs:
+#   search <query> [--limit N]        YouTrack query language search (default limit 5)
+#   get <id>                          one issue's metadata; id is the readable form, e.g. PROJ-123
+#   comments <id> [--max-comments N]  comment thread (default max 8)
+#
+# Examples:
+#   ./bin/yt search "project: SAM" --limit 3
+#   ./bin/yt get SAM-42
+#   ./bin/yt comments SAM-42 --max-comments 3 --json
+#
+# Thin wrapper over extensions/youtrack/cli.ts via node --experimental-strip-types.
+# Auth comes from the environment or ~/.config/youtrack/.env — see
+# extensions/youtrack/README.md. GET-only by construction.
+#
+
+set -euo pipefail
+
+# Resolve this script's own directory portably (following symlinks), so the
+# wrapper works from any cwd and from a symlinked PATH entry.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+exec node --experimental-strip-types "$REPO_ROOT/extensions/youtrack/cli.ts" "$@"
