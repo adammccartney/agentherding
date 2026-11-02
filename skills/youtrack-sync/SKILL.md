@@ -16,8 +16,8 @@ run`; stdlib only) next to this file.
    use `reconcile` instead.
 3. agentherding-area todos (agentherding repo, meta tooling) stay local
    unless the user says otherwise.
-4. Reads for exploration go through the `youtrack` extension tool (search /
-   get / comments); this script's `stages` is for vocabulary inspection.
+4. Reads for exploration go through `bin/yt` (search / get / comments);
+   this script's `stages` is for vocabulary inspection.
 
 ## Config (injected, private — nothing about our instance lives here)
 
@@ -56,7 +56,7 @@ Lists open/in_progress todos, flags those already carrying a `youtrack:` marker.
   Defaults without `--stage`: `open`→`To Do`, `in_progress`→`In Progress`.
 - Choose a **swimlane**: on the ASC-template boards swimlanes are Work
   Packages; cards join a swimlane as a **subtask of that Work Package**.
-  Find parents with the youtrack tool: e.g. search `project: <SHORT>` and
+  Find parents with `bin/yt`: e.g. `bin/yt search "project: <SHORT>"` and
   read the `Type` values, or ask the user which Work Package.
 - Default **Type**: `Task` (override with `--type`).
 
