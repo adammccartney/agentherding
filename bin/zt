@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# zt — read-only Zammad CLI for support.vsc.ac.at (standalone, no pi)
+#
+# Usage: ./bin/zt <search|get|articles> [args] [--json]
+#        ./bin/zt --help
+#
+# Wraps extensions/zammad/cli.ts via node's type stripping (node >= 22).
+# Auth: see extensions/zammad/README.md (~/.config/zammad/token,
+# overrides ZAMMAD_BASE_URL / ZAMMAD_TOKEN_FILE).
+#
+
+set -euo pipefail
+
+# Resolve this script's own directory (repo root is its parent), portably
+BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+
+exec node --experimental-strip-types "$BIN_DIR/../extensions/zammad/cli.ts" "$@"
