@@ -50,6 +50,9 @@ callers; annotated `readOnlyHint`.
 YOUTRACK_BASE_URL=https://youtrack.example.com node --experimental-strip-types test-api.ts
 ```
 
+The Prospero-era CLI lives at `bin/yt` (stdlib python3; suite: `tests/yt_test.py`) —
+`api.ts` here serves the pi extension only.
+
 ## Query language
 
 YouTrack's query language, e.g.
