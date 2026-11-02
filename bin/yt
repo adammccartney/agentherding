@@ -1,35 +1,533 @@
-#!/usr/bin/env bash
-#
-# yt — standalone read-only YouTrack CLI (no pi required)
-#
-# Usage: ./bin/yt <verb> [args] [--json]
-#
-# Verbs:
-#   search <query> [--limit N]        YouTrack query language search (default limit 5)
-#   get <id>                          one issue's metadata; id is the readable form, e.g. PROJ-123
-#   comments <id> [--max-comments N]  comment thread (default max 8)
-#
-# Examples:
-#   ./bin/yt search "project: SAM" --limit 3
-#   ./bin/yt get SAM-42
-#   ./bin/yt comments SAM-42 --max-comments 3 --json
-#
-# Thin wrapper over extensions/youtrack/cli.ts via node --experimental-strip-types.
-# Auth comes from the environment or ~/.config/youtrack/.env — see
-# extensions/youtrack/README.md. GET-only by construction.
-#
+#!/usr/bin/env python3
+"""yt — read-only YouTrack CLI (standalone, no pi, no node).
 
-set -euo pipefail
+Usage: yt <search|get|comments> [args] [--json]
+       yt --help
 
-# Resolve this script's own directory portably (following symlinks), so the
-# wrapper works from any cwd and from a symlinked PATH entry.
-SOURCE="${BASH_SOURCE[0]}"
-while [[ -L "$SOURCE" ]]; do
-    DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
-    SOURCE="$(readlink "$SOURCE")"
-    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
-done
-SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+Stdlib-only python3 re-implementation of the pi youtrack extension's CLI
+(config resolution, field shaping, caps, thread windowing, rendering) —
+byte parity with extensions/youtrack/cli.ts is the goal; the TS core in
+extensions/youtrack/api.ts stays with the pi extension until pi retires.
+Keep the two sides pinned: --json output shapes, text rendering, error
+messages, exit codes — see tests/yt_test.py and the parity note in
+.pi/todos/648150db.md.
 
-exec node --experimental-strip-types "$REPO_ROOT/extensions/youtrack/cli.ts" "$@"
+Auth: YOUTRACK_TOKEN / YOUTRACK_BASE_URL from the environment or a dotenv
+file (default ~/.config/youtrack/.env, override with YOUTRACK_TOKEN_FILE);
+YOUTRACK_TOKEN_CMD as token fallback (argv form, no shell). GET-only. The
+token never appears in any output. Exit codes: 0 ok, 1 runtime error,
+2 usage error.
+"""
+
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_TOKEN_FILE = os.path.expanduser(os.path.join("~", ".config", "youtrack", ".env"))
+DEFAULT_SEARCH_LIMIT = 5
+DEFAULT_MAX_COMMENTS = 8
+DESCRIPTION_CAP = 2000
+PER_COMMENT_CHAR_CAP = 4000
+
+SEARCH_FIELDS = (
+    "idReadable,summary,updated,resolved,commentsCount,"
+    "project(shortName),customFields(name,value(name))"
+)
+DETAIL_FIELDS = SEARCH_FIELDS.replace(
+    "idReadable", "idReadable,description,created,reporter(login,fullName)", 1
+)
+COMMENT_FIELDS = "id,created,author(login,fullName),text,deleted"
+
+USAGE = f"""Usage: yt <verb> [args] [--json]
+
+Verbs:
+  search <query> [--limit N]        YouTrack query language search (default --limit {DEFAULT_SEARCH_LIMIT}).
+  get <id>                          One issue's metadata; id is the readable form, e.g. PROJ-123.
+  comments <id> [--max-comments N]  Comment thread (default --max-comments {DEFAULT_MAX_COMMENTS};
+                                    long threads keep the first 2 and last N-2).
+
+Options:
+  --json   Print the structured result object ({{ issues }} | {{ issue }} | {{ thread }}) as JSON
+           instead of the text rendering.
+  --help   Show this text.
+
+Auth: YOUTRACK_TOKEN / YOUTRACK_BASE_URL from the environment or a dotenv file
+(default ~/.config/youtrack/.env, override with YOUTRACK_TOKEN_FILE);
+YOUTRACK_TOKEN_CMD as token fallback. See extensions/youtrack/README.md.
+"""
+
+
+class YtError(Exception):
+    """Runtime failure: reported as 'Error: <msg>' on stderr, exit 1."""
+
+
+def usage_exit(problem=None):
+    """Usage failure: usage text to stderr, exit 2."""
+    if problem:
+        sys.stderr.write(f"Error: {problem}\n\n")
+    sys.stderr.write(USAGE)
+    sys.exit(2)
+
+
+def _js_number(raw):
+    """Mirror JS Number() for flag values: decimal, exponent and hex forms."""
+    s = raw.strip()
+    if not s:
+        return 0.0
+    if re.fullmatch(r"[+-]?0[xX][0-9a-fA-F]+", s):
+        return float(int(s, 16))
+    if not re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", s):
+        return float("nan")
+    return float(s)
+
+
+def parse_positive_int(flag, raw, fallback):
+    if raw is None:
+        return fallback
+    n = _js_number(raw)
+    if not n == n or not float(n).is_integer() or n < 1:
+        usage_exit(f'"{flag}" expects a positive integer, got "{raw}".')
+    return int(n)
+
+
+# ---------------------------------------------------------------------------
+# Config — mirrors loadConfig() in extensions/youtrack/api.ts.
+
+
+def parse_dotenv(raw):
+    """KEY=value lines; a bare non-KEY line is tolerated as the token itself."""
+    out = {}
+    bare = None
+    for line in re.split(r"\r?\n", raw):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        eq = s.find("=")
+        if eq == -1:
+            bare = s
+            continue
+        out[s[:eq].strip()] = re.sub(r'^["\']|["\']$', "", s[eq + 1:].strip())
+    if bare and "YOUTRACK_TOKEN" not in out:
+        out["YOUTRACK_TOKEN"] = bare
+    return out
+
+
+def load_config():
+    token_file = os.environ.get("YOUTRACK_TOKEN_FILE")
+    if token_file is None:
+        token_file = DEFAULT_TOKEN_FILE
+    try:
+        with open(token_file, "r", encoding="utf-8") as fh:
+            file = parse_dotenv(fh.read())
+    except OSError:
+        # The file is optional; environment alone may suffice.
+        file = {}
+
+    def get(k):
+        return os.environ.get(k) or file.get(k)
+
+    token = get("YOUTRACK_TOKEN")
+    if not token:
+        cmd = get("YOUTRACK_TOKEN_CMD")
+        if cmd:
+            argv = re.split(r"\s+", cmd)
+            try:
+                proc = subprocess.run(
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                )
+                token = proc.stdout.strip()
+            except Exception:
+                raise YtError(f'YOUTRACK_TOKEN_CMD "{cmd}" failed or printed nothing.') from None
+    if not token:
+        raise YtError(
+            f"YouTrack token missing — set YOUTRACK_TOKEN (env or {token_file}) "
+            "or YOUTRACK_TOKEN_CMD."
+        )
+
+    base_url = get("YOUTRACK_BASE_URL")
+    if base_url:
+        base_url = re.sub(r"/+$", "", base_url)
+    if not base_url:
+        raise YtError(
+            f"YouTrack base URL missing — set YOUTRACK_BASE_URL (env or {token_file}); "
+            "none is baked in."
+        )
+    return {"base_url": base_url, "token": token}
+
+
+# ---------------------------------------------------------------------------
+# Low-level GET — the only network verb in this file. Mirrors ytGet().
+
+
+def yt_get(cfg, api_path, params=None):
+    url = f"{cfg['base_url']}/api{api_path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {cfg['token']}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as res:
+            return json.load(res)
+    except urllib.error.HTTPError as err:
+        try:
+            body = err.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            body = ""
+        raise YtError(
+            f"YouTrack GET {api_path} failed: HTTP {err.code} {body}".strip()
+        ) from None
+
+
+# ---------------------------------------------------------------------------
+# Field shaping — mirrors api.ts. The workflow field is "Stage" on
+# ASC-template projects; the software development board uses "State".
+
+
+def _nn(value, fallback):
+    """JS ?? — only null/undefined fall back."""
+    return fallback if value is None else value
+
+
+def _js_str(v):
+    """JS String(v) for the scalar cases JSON can produce."""
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def custom_value(issue, name):
+    for cf in issue.get("customFields") or []:
+        if not isinstance(cf, dict) or cf.get("name") != name:
+            continue
+        v = cf.get("value")
+        if v is None:
+            return ""
+        if isinstance(v, list):
+            names = []
+            for x in v:
+                n = x.get("name") if isinstance(x, dict) else None
+                names.append(n if n is not None else "")
+            return ", ".join(s for s in names if s)
+        if isinstance(v, dict):
+            n = v.get("name")
+            return _js_str(n) if n is not None else "[object Object]"
+        return _js_str(v)
+    return ""
+
+
+def stage_of(issue):
+    return custom_value(issue, "Stage") or custom_value(issue, "State")
+
+
+def iso_date(ms):
+    """Epoch milliseconds → JS toISOString form, e.g. 2026-10-20T15:05:11.793Z."""
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+        return ""
+    try:
+        sec, rem = divmod(int(ms), 1000)  # JS Date truncates fractional ms
+        dt = datetime.datetime.fromtimestamp(sec, tz=datetime.timezone.utc)
+        return (
+            f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}T"
+            f"{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}.{rem:03d}Z"
+        )
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def to_row(t):
+    project = t.get("project")
+    return {
+        "id": _nn(t.get("idReadable"), _nn(t.get("id"), "")),
+        "summary": _nn(t.get("summary"), ""),
+        "project": _nn(project.get("shortName") if isinstance(project, dict) else None, ""),
+        "stage": stage_of(t),
+        "priority": custom_value(t, "Priority"),
+        "resolved": t.get("resolved") is not None,
+        "comments": _nn(t.get("commentsCount"), 0),
+        "updated": iso_date(t.get("updated")),
+    }
+
+
+READABLE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*-\d+")
+
+
+def assert_readable_id(ident):
+    clean = ident.strip()
+    if not READABLE_ID.fullmatch(clean):
+        raise YtError(
+            f'"{ident}" is not an issue id — expected the readable form, e.g. "PROJ-123".'
+        )
+    return clean
+
+
+# ---------------------------------------------------------------------------
+# Actions — search / get / comments. Mirrors api.ts searchIssues, getIssue,
+# getComments (comments windowed like zammad articles: first 2, last N-2).
+
+
+def search_issues(cfg, query, limit):
+    res = yt_get(
+        cfg,
+        "/issues",
+        [("query", query), ("$top", str(limit)), ("fields", SEARCH_FIELDS)],
+    )
+    if not isinstance(res, list):
+        err = res.get("error") if isinstance(res, dict) else None
+        if err is None:
+            err = "not an issue list"
+        detail = err[:120] if isinstance(err, str) else "unknown"
+        raise YtError(f"Unexpected search response: {detail}")
+    return [to_row(t) for t in res[:limit]]
+
+
+def issue_tags(cfg, id_readable):
+    # Deliberate api.ts:181 parity: every failure (and any non-list body) is
+    # swallowed to no tags.
+    try:
+        res = yt_get(
+            cfg,
+            f"/issues/{urllib.parse.quote(id_readable, safe='')}/tags",
+            [("fields", "name")],
+        )
+    except Exception:
+        return []
+    if not isinstance(res, list):
+        return []
+    return [
+        t["name"]
+        for t in res
+        if isinstance(t, dict) and t.get("name")
+    ]
+
+
+def get_issue(cfg, id_readable):
+    ident = assert_readable_id(id_readable)
+    t = yt_get(cfg, f"/issues/{urllib.parse.quote(ident, safe='')}", [("fields", DETAIL_FIELDS)])
+    raw_desc = _nn(t.get("description"), "")
+    capped = len(raw_desc) > DESCRIPTION_CAP
+    row = to_row(t)
+    reporter = t.get("reporter")
+    reporter = reporter if isinstance(reporter, dict) else {}
+    row.update(
+        {
+            "description": raw_desc[:DESCRIPTION_CAP] if capped else raw_desc,
+            "description_capped": capped,
+            "reporter": reporter.get("fullName") or reporter.get("login") or "",
+            "assignee": custom_value(t, "Assignee"),
+            "created": iso_date(t.get("created")),
+            "resolved_at": iso_date(t.get("resolved")),
+            "tags": issue_tags(cfg, ident),
+        }
+    )
+    return row
+
+
+def get_comments(cfg, id_readable, maximum):
+    ident = assert_readable_id(id_readable)
+    raw = yt_get(
+        cfg,
+        f"/issues/{urllib.parse.quote(ident, safe='')}/comments",
+        [("fields", COMMENT_FIELDS)],
+    )
+    if not isinstance(raw, list):
+        raise YtError("Unexpected comments response.")
+    live = [c for c in raw if not (isinstance(c, dict) and c.get("deleted"))]
+    total = len(live)
+    keep_first = min(2, maximum, total)
+    keep_last = maximum - keep_first
+    chosen = live if total <= maximum else live[:keep_first] + live[total - keep_last:]
+    omitted = total - len(chosen)
+    notes = []
+    if omitted > 0:
+        notes.append(
+            f"{omitted} middle comment(s) omitted (kept first {keep_first} "
+            f"and last {keep_last})."
+        )
+    comments = []
+    seen = set()
+    for c in chosen:
+        cid = c.get("id")
+        if cid in seen:
+            continue
+        seen.add(cid)
+        text = _nn(c.get("text"), "")
+        if len(text) > PER_COMMENT_CHAR_CAP:
+            text = text[:PER_COMMENT_CHAR_CAP] + " … [comment truncated]"
+            if not any("capped" in n for n in notes):
+                notes.append(f"Long comments capped at {PER_COMMENT_CHAR_CAP} chars.")
+        author = c.get("author")
+        author = author if isinstance(author, dict) else {}
+        comments.append(
+            {
+                "at": iso_date(c.get("created")),
+                "from": author.get("fullName") or author.get("login") or "unknown",
+                "text": text,
+            }
+        )
+    head = yt_get(cfg, f"/issues/{urllib.parse.quote(ident, safe='')}", [("fields", "summary")])
+    return {
+        "id": ident,
+        "summary": _nn(head.get("summary") if isinstance(head, dict) else None, ""),
+        "tags": issue_tags(cfg, ident),
+        "total": total,
+        "shown": len(comments),
+        "omitted": omitted,
+        "comments": comments,
+        "notes": notes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rendering + verb dispatch — mirrors cli.ts exactly.
+
+
+def emit(structured, text, as_json):
+    if as_json:
+        sys.stdout.write(json.dumps(structured, indent=2, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(text + "\n")
+
+
+def render_search(query, rows):
+    if not rows:
+        return f'No issues found for query "{query}".'
+    lines = [
+        f'## Issue search — "{query}" ({len(rows)} shown)',
+        "",
+        "| id | summary | project | stage | pri | resolved | comments | updated |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['id']} | {r['summary']} | {r['project']} | {r['stage']} "
+            f"| {r['priority']} | {'yes' if r['resolved'] else ''} | {r['comments']} "
+            f"| {r['updated'][:10]} |"
+        )
+    return "\n".join(lines)
+
+
+def render_issue(t):
+    tags = f" · tags: {', '.join(t['tags'])}" if t["tags"] else ""
+    resolved = f" · resolved: {t['resolved_at'][:10]}" if t["resolved_at"] else ""
+    lines = [
+        f"{t['id']} — {t['summary']}",
+        f"project: {t['project']} · stage: {t['stage'] or '—'} "
+        f"· priority: {t['priority'] or '—'} · assignee: {t['assignee'] or '—'}{tags}",
+        f"reporter: {t['reporter'] or '—'} · comments: {t['comments']} "
+        f"· created: {t['created'][:10]} · updated: {t['updated'][:10]}{resolved}",
+    ]
+    if t["description"]:
+        lines += ["", t["description"]]
+        if t["description_capped"]:
+            lines.append(f"… [description capped at {DESCRIPTION_CAP} chars]")
+    lines.append('Use action "comments" with this id to read the comment thread.')
+    return "\n".join(lines)
+
+
+def render_thread(thread):
+    omitted = f", {thread['omitted']} omitted" if thread["omitted"] else ""
+    tags = f" · tags: {', '.join(thread['tags'])}" if thread["tags"] else ""
+    parts = [
+        f"{thread['id']} — {thread['summary']} — {thread['total']} comment(s), "
+        f"showing {thread['shown']}{omitted}{tags}"
+    ]
+    for c in thread["comments"]:
+        parts.append(f"---\n### {c['at'].replace('T', ' ', 1)[:16]} · {c['from']}\n{c['text']}")
+    for note in thread["notes"]:
+        parts.append(f"[note: {note}]")
+    return "\n".join(parts)
+
+
+def main(argv):
+    as_json = False
+    limit_arg = None
+    max_comments_arg = None
+    positional = []
+    i = 0
+    # Flagscan first, as in cli.ts: --help and unknown flags exit before
+    # config is touched; --limit/--max-comments parse verb-agnostically.
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            as_json = True
+        elif a in ("--help", "-h"):
+            sys.stdout.write(USAGE)
+            return
+        elif a in ("--limit", "--max-comments"):
+            i += 1
+            if i >= len(argv):
+                usage_exit(f'"{a}" requires a value.')
+            if a == "--limit":
+                limit_arg = argv[i]
+            else:
+                max_comments_arg = argv[i]
+        elif a.startswith("--"):
+            usage_exit(f'unknown flag "{a}".')
+        else:
+            positional.append(a)
+        i += 1
+
+    verb = positional[0] if positional else None
+    if not verb:
+        usage_exit()
+
+    if verb == "search":
+        query = positional[1] if len(positional) > 1 else None
+        if query is None or not query.strip():
+            usage_exit('verb "search" requires a query, e.g. yt search "project: PROJ Stage: Open".')
+        limit = parse_positive_int("--limit", limit_arg, DEFAULT_SEARCH_LIMIT)
+        cfg = load_config()
+        rows = search_issues(cfg, query, limit)
+        emit({"issues": rows}, render_search(query, rows), as_json)
+    elif verb == "get":
+        ident = positional[1] if len(positional) > 1 else None
+        if ident is None or not ident.strip():
+            usage_exit('verb "get" requires an id, e.g. yt get PROJ-123.')
+        # Validate the id before touching config or the network.
+        clean = assert_readable_id(ident)
+        cfg = load_config()
+        issue = get_issue(cfg, clean)
+        emit({"issue": issue}, render_issue(issue), as_json)
+    elif verb == "comments":
+        ident = positional[1] if len(positional) > 1 else None
+        if ident is None or not ident.strip():
+            usage_exit('verb "comments" requires an id, e.g. yt comments PROJ-123.')
+        clean = assert_readable_id(ident)
+        maximum = parse_positive_int("--max-comments", max_comments_arg, DEFAULT_MAX_COMMENTS)
+        cfg = load_config()
+        thread = get_comments(cfg, clean, maximum)
+        emit({"thread": thread}, render_thread(thread), as_json)
+    else:
+        usage_exit(f'unknown verb "{verb}" — use "search", "get", or "comments".')
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except YtError as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
