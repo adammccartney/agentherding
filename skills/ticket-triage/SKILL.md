@@ -33,7 +33,9 @@ other groups may come into scope later.
 
 ## Deliverable
 
-Short note into the matching agent-context area:
+A short note in the matching agent-context repo's `ticket-triage/` directory
+(create the directory if missing), the file named `<number>-<short-topic>.md`
+— e.g. `ticket-triage/206540-pytorch-install.md`:
 **request** (one line) → **verdict**: container | venv | EasyBuild (existing
 module | new recipe) → **evidence** (ticket numbers, which search pass, doc
 paths) → **suggested tags** for classification (prefer tags already in use;
