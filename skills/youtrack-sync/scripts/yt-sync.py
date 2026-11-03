@@ -11,6 +11,10 @@ write flag or explicit write intent):
                                  plan (default) or execute create+link+back-link
   reconcile  --dir <path>        drift report: local status vs issue Stage, for
                                  every todo carrying a "youtrack:" marker
+  update     --todo <file> [--apply]
+                                 plan or execute a description re-sync: pushes the
+                                 todo body (minus the back-link section) into the
+                                 linked issue's description
   set-stage  --issue <ID> --stage NAME
                                  explicit Stage change (write; use only on
                                  explicit user approval)
@@ -290,6 +294,50 @@ def cmd_reconcile(args, http):
         print("all aligned")
 
 
+SYNC_SECTION = re.compile(r"\n*# YouTrack\n\n(?:- \*\*youtrack:[^\n]*\n?)+", re.M)
+
+
+def description_body(t):
+    """Todo body as a YouTrack description: without the back-link section."""
+    body = SYNC_SECTION.sub("\n\n", t["body"])
+    return re.sub(r"\n{3,}", "\n\n", body).strip() + "\n"
+
+
+def cmd_update(args, http):
+    import difflib
+
+    t = parse_todo(args.todo)
+    if not t:
+        die(f"cannot parse todo {args.todo}")
+    if not t["issue"]:
+        die(f'{t["id"]} carries no youtrack: marker — run apply first')
+    desired = description_body(t)
+    issue = http("GET", f"/api/issues/{t['issue']}?fields=summary,description")
+    current = ((issue.get("description") or "").strip() + "\n")
+    diff = list(difflib.unified_diff(current.splitlines(), desired.splitlines(),
+                                     lineterm="", n=1))
+    plus = sum(1 for x in diff if x.startswith("+"))
+    minus = sum(1 for x in diff if x.startswith("-"))
+    print("PLAN")
+    print(f"  todo:  {t['id']} -> {t['issue']}  {t['title'][:70]}")
+    print(f"  desc:  {len(current)} -> {len(desired)} chars, +{max(plus - 2, 0)}/-{max(minus - 2, 0)} lines")
+    if not plus and not minus:
+        print("  in sync — nothing to do")
+        return
+    for x in diff[:14]:
+        print("    " + x)
+    if len(diff) > 14:
+        print(f"    … ({len(diff) - 14} more diff lines)")
+    if not args.apply:
+        print("\nplan only — re-run with --apply after user approval")
+        return
+    http("POST", f"/api/issues/{t['issue']}?fields=idReadable",
+         {"description": desired})
+    chk = http("GET", f"/api/issues/{t['issue']}?fields=description")
+    got = (chk.get("description") or "").strip()
+    print(f"updated {t['issue']}: description {'OK' if got == desired.strip() else 'MISMATCH — check manually'}")
+
+
 def cmd_set_stage(args, http):
     http("POST", "/api/commands", {"query": f"Stage {args.stage}",
                                    "issues": [{"idReadable": args.issue}]})
@@ -310,6 +358,9 @@ def main():
     p.add_argument("--parent")
     p.add_argument("--apply", action="store_true")
     p = sub.add_parser("reconcile"); p.add_argument("--dir", required=True)
+    p = sub.add_parser("update")
+    p.add_argument("--todo", required=True)
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("set-stage")
     p.add_argument("--issue", required=True)
     p.add_argument("--stage", required=True)
@@ -325,6 +376,8 @@ def main():
             cmd_apply(args, http)
         elif args.cmd == "reconcile":
             cmd_reconcile(args, http)
+        elif args.cmd == "update":
+            cmd_update(args, http)
         elif args.cmd == "set-stage":
             cmd_set_stage(args, http)
 
