@@ -107,6 +107,14 @@ Co-Authored-by: GitHub Copilot <copilot@github.com>
    git commit -m "<subject>" -m "<body>" -m "Co-Authored-by: Pi (aqueduct/qwen-3.5-397b) <pi-coding-agent>"
    ```
 
+   Bash does not expand `\n` inside double quotes — `-m "line one\nline two"`
+   stores a literal backslash-n in the message. Put real line breaks inside
+   the quoted string, or pass one `-m` per paragraph. Verify the written
+   message before moving on: `git log --format=%B -1 | grep -F '\n'` should
+   print nothing; if it does, amend while the commit is still local.
+   Also mind the shared checkout: confirm HEAD is on the intended branch
+   (`git branch --show-current`) right before any commit or amend.
+
 ## Examples
 
 Good commits:
