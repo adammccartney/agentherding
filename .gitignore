@@ -21,3 +21,5 @@ Thumbs.db
 node_modules/
 
 .pi/todos/
+__pycache__/
+*.pyc

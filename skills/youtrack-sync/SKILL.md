@@ -97,6 +97,20 @@ python3 scripts/yt-sync.py set-stage --issue <ID> --stage <name>   # write; need
 
 or pull remote by editing the todo's status (ordinary todo update).
 
+### 5. Update (description drift)
+
+Issue descriptions are snapshots at create time. When a synced todo's body moves
+(progress notes, incident rounds), re-push the description:
+
+```bash
+python3 scripts/yt-sync.py update --todo <file>           # plan: diff vs live description
+python3 scripts/yt-sync.py update --todo <file> --apply   # write + verify
+```
+
+The pushed body excludes the todo's `# YouTrack` back-link section. In-sync items
+print "in sync — nothing to do" and write nothing. Same gate as everything else:
+run on explicit user decision, per item.
+
 ## Filing and promotion
 
 - Design context and the first manual sync (CFS-48/CFS-49) live in the
@@ -106,3 +120,6 @@ or pull remote by editing the todo's status (ordinary todo update).
 - Divergent vocabularies: most scoped projects share one Stage template;
   INC differs (`Mitigated`/`Remediated`/`Risk accepted` are its resolved
   values). Always read `stages` output for the target project when unsure.
+- `update` subcommand (description re-sync) added 2026-10-29 during the
+  CFS-59/60 incident round: the first write shape beyond create/set-stage.
+  Same plan/apply and per-item approval discipline as the rest.
