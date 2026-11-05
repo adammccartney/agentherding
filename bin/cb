@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""cb — read-only Confluence CLI for colab.tuwien.ac.at (stdlib python3).
+
+Usage: cb <spaces|search|get> [args] [--json]
+       cb --help
+
+Auth: COLAB_TOKEN, or a raw token at ~/.config/colab/token (mode 0600);
+COLAB_TOKEN_FILE and COLAB_BASE_URL override the defaults. GET-only. The token
+never appears in output. Exit codes: 0 ok, 1 runtime error, 2 usage error.
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_BASE_URL = "https://colab.tuwien.ac.at"
+DEFAULT_TOKEN_FILE = os.path.expanduser(os.path.join("~", ".config", "colab", "token"))
+DEFAULT_SPACES_LIMIT = 25
+DEFAULT_SEARCH_LIMIT = 5
+BODY_CHAR_CAP = 4000
+BODY_CAP_MARKER = "… [body capped at 4000 chars]"
+
+USAGE = f"""Usage: cb <verb> [args] [--json]
+
+Read-only CLI for TU coLAB (https://colab.tuwien.ac.at).
+
+Verbs:
+  spaces [--limit N]      list spaces (default limit {DEFAULT_SPACES_LIMIT})
+  search <cql> [--limit N]  raw CQL search (default limit {DEFAULT_SEARCH_LIMIT})
+  get <id>                one page's metadata and HTML body as text
+
+Options:
+  --json    print the structured result object as JSON instead of text
+  --help    show this usage
+
+Auth: COLAB_TOKEN, or a raw token at ~/.config/colab/token (mode 0600).
+COLAB_TOKEN_FILE overrides the token path; COLAB_BASE_URL overrides the base URL."""
+
+
+class CbError(Exception):
+    """Runtime failure: reported as 'Error: <msg>' on stderr, exit 1."""
+
+
+def usage_error(msg=None):
+    if msg:
+        sys.stderr.write(f"Error: {msg}\n\n")
+    sys.stderr.write(f"{USAGE}\n")
+    sys.exit(2)
+
+
+def positive_int(flag, raw, fallback):
+    if raw is None:
+        return fallback
+    if not re.fullmatch(r"\d+", raw) or int(raw) < 1:
+        usage_error(f'{flag} expects a positive integer, got "{raw}".')
+    return int(raw)
+
+
+# ---------------------------------------------------------------------------
+# Config and the sole low-level network helper (GET-only).
+
+def load_config():
+    token = (os.environ.get("COLAB_TOKEN") or "").strip()
+    if not token:
+        token_file = os.environ.get("COLAB_TOKEN_FILE") or DEFAULT_TOKEN_FILE
+        try:
+            with open(token_file, "r", encoding="utf-8") as fh:
+                token = fh.read().strip()
+        except OSError:
+            raise CbError(
+                f"coLAB token not readable at {token_file} — store the token there "
+                "(chmod 600) or set COLAB_TOKEN."
+            )
+        if not token:
+            raise CbError(
+                f"coLAB token file {token_file} is empty — add a token or set COLAB_TOKEN."
+            )
+    base_url = re.sub(r"/+$", "", os.environ.get("COLAB_BASE_URL") or DEFAULT_BASE_URL)
+    return {"base_url": base_url, "token": token}
+
+
+def cb_get(cfg, api_path, params=None):
+    url = f"{cfg['base_url']}{api_path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {cfg['token']}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req) as res:
+            return json.load(res)
+    except urllib.error.HTTPError as err:
+        try:
+            body = err.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            body = ""
+        raise CbError(f"coLAB GET {api_path} failed: HTTP {err.code} {body}".strip())
+
+
+# ---------------------------------------------------------------------------
+# Response validation and shaping.
+
+def unexpected(detail):
+    raise CbError(f"coLAB API returned an unexpected response: {detail}.")
+
+
+def object_value(value, where):
+    if not isinstance(value, dict):
+        unexpected(f"{where} is not an object")
+    return value
+
+
+def list_value(value, where):
+    if not isinstance(value, list):
+        unexpected(f"{where} is not a list")
+    return value
+
+
+def text_field(mapping, key, where, allow_int=False):
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, str):
+        if not (allow_int and isinstance(value, int) and not isinstance(value, bool)):
+            unexpected(f"{where}.{key} is not text")
+    return str(value)
+
+
+def results_list(payload):
+    obj = object_value(payload, "top level")
+    return list_value(obj.get("results"), "results")
+
+
+def spaces_from(payload):
+    rows = []
+    for index, raw in enumerate(results_list(payload)):
+        where = f"results[{index}]"
+        space = object_value(raw, where)
+        rows.append({
+            "key": text_field(space, "key", where),
+            "name": text_field(space, "name", where),
+            "type": text_field(space, "type", where),
+        })
+    return rows
+
+
+def strip_highlights(title):
+    # Confluence marks search hits with @@@hl@@@…@@@endhl@@@; hide the markers.
+    return title.replace("@@@hl@@@", "").replace("@@@endhl@@@", "")
+
+
+def search_from(payload, limit):
+    rows = []
+    for index, raw in enumerate(results_list(payload)[:limit]):
+        where = f"results[{index}]"
+        result = object_value(raw, where)
+        content = object_value(result.get("content"), f"{where}.content")
+        space = object_value(content.get("space"), f"{where}.content.space")
+        rows.append({
+            "id": text_field(content, "id", f"{where}.content", allow_int=True),
+            "title": strip_highlights(text_field(result, "title", where)),
+            "space": text_field(space, "key", f"{where}.content.space"),
+            "type": text_field(content, "type", f"{where}.content"),
+        })
+    return rows
+
+
+# Keep this pipeline in the same order as bin/zt's html_to_text().
+def html_to_text(html):
+    if not html:
+        return ""
+    s = html
+    # drop non-content blocks entirely
+    s = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", s, flags=re.I | re.S)
+    # line structure
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"<li[^>]*>", "\n- ", s, flags=re.I)
+    s = re.sub(r"</(p|div|tr|table|h[1-6]|blockquote|ul|ol)>", "\n", s, flags=re.I)
+    # everything else: tags out
+    s = re.sub(r"<[^>]+>", "", s)
+    # entities, same order as bin/zt
+    s = re.sub(r"&nbsp;", " ", s, flags=re.I)
+    s = re.sub(r"&amp;", "&", s, flags=re.I)
+    s = re.sub(r"&lt;", "<", s, flags=re.I)
+    s = re.sub(r"&gt;", ">", s, flags=re.I)
+    s = re.sub(r"&quot;", '"', s, flags=re.I)
+    s = re.sub(r"&(apos|#39);", "'", s, flags=re.I)
+    s = re.sub(r"&#x([0-9a-f]+);", lambda m: chr(int(m.group(1), 16)), s, flags=re.I)
+    s = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), s)
+    # tidy whitespace
+    s = "\n".join(re.sub(r"[ \t]+$", "", line) for line in s.split("\n"))
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def page_from(payload):
+    page = object_value(payload, "page")
+    space = object_value(page.get("space"), "page.space")
+    version = object_value(page.get("version"), "page.version")
+    body = object_value(page.get("body"), "page.body")
+    view = object_value(body.get("view"), "page.body.view")
+    html = view.get("value")
+    if not isinstance(html, str):
+        unexpected("page.body.view.value is not text")
+    number = version.get("number")
+    if isinstance(number, bool) or not isinstance(number, int):
+        unexpected("page.version.number is not an integer")
+    text = html_to_text(html)
+    capped = len(text) > BODY_CHAR_CAP
+    if capped:
+        text = text[:BODY_CHAR_CAP] + " " + BODY_CAP_MARKER
+    return {
+        "id": text_field(page, "id", "page", allow_int=True),
+        "title": strip_highlights(text_field(page, "title", "page")),
+        "space": text_field(space, "key", "page.space"),
+        "type": text_field(page, "type", "page"),
+        "version": number,
+        "updated": text_field(version, "when", "page.version"),
+        "body": text,
+        "body_capped": capped,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rendering and verb dispatch.
+
+def print_json(value):
+    sys.stdout.write(f"{json.dumps(value, indent=2, ensure_ascii=False)}\n")
+
+
+def print_table(headers, rows):
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "|".join("---" for _ in headers) + "|",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row[h]) for h in headers) + " |")
+    return lines
+
+
+def only_opts(opts, positional, verb, *allowed):
+    for key in opts:
+        if key not in allowed:
+            usage_error(f'option {key} does not apply to "{verb}".')
+    if len(positional) > 2:
+        usage_error(f'unexpected extra argument "{positional[2]}".')
+
+
+def cmd_spaces(cfg, positional, opts, as_json):
+    if len(positional) > 1:
+        usage_error(f'unexpected extra argument "{positional[1]}".')
+    only_opts(opts, positional, "spaces", "--limit")
+    limit = positive_int("--limit", opts.get("--limit"), DEFAULT_SPACES_LIMIT)
+    rows = spaces_from(cb_get(cfg, "/rest/api/space", {"limit": str(limit)}))
+    if as_json:
+        print_json({"spaces": rows})
+        return
+    lines = [f"## coLAB spaces ({len(rows)} shown)", ""]
+    lines.extend(print_table(["key", "name", "type"], rows))
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_search(cfg, positional, opts, as_json):
+    cql = positional[1] if len(positional) > 1 else None
+    if not cql or not cql.strip():
+        usage_error('search requires a <cql>, e.g. cb search \'siteSearch ~ "gateway"\'.')
+    only_opts(opts, positional, "search", "--limit")
+    limit = positive_int("--limit", opts.get("--limit"), DEFAULT_SEARCH_LIMIT)
+    payload = cb_get(cfg, "/rest/api/search", {
+        "cql": cql,
+        "limit": str(limit),
+        "expand": "content.space",
+    })
+    rows = search_from(payload, limit)
+    if as_json:
+        print_json({"results": rows})
+        return
+    if not rows:
+        sys.stdout.write(f'No results for CQL "{cql}".\n')
+        return
+    lines = [f'## coLAB search — "{cql}" ({len(rows)} shown)', ""]
+    lines.extend(print_table(["id", "title", "space", "type"], rows))
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_get(cfg, positional, opts, as_json):
+    ident = positional[1] if len(positional) > 1 else None
+    if not ident or not ident.strip():
+        usage_error("get requires an <id>, e.g. cb get 1234567.")
+    only_opts(opts, positional, "get")
+    quoted_id = urllib.parse.quote(ident, safe="")
+    api_path = f"/rest/api/content/{quoted_id}"
+    payload = cb_get(cfg, api_path, {"expand": "space,body.view,version,history"})
+    page = page_from(payload)
+    if as_json:
+        print_json({"page": page})
+        return
+    lines = [
+        f"{page['id']} — {page['title']}",
+        f"space: {page['space']} · type: {page['type']} · version: {page['version']} "
+        f"· updated: {page['updated'][:10]}",
+        "",
+        page["body"],
+    ]
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def main(argv):
+    # Flag scan precedes config load so --help and malformed options need no token.
+    as_json = False
+    positional = []
+    opts = {}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--json":
+            as_json = True
+        elif arg in ("--help", "-h"):
+            sys.stdout.write(f"{USAGE}\n")
+            sys.exit(0)
+        elif arg == "--limit":
+            i += 1
+            if i >= len(argv):
+                usage_error(f"option {arg} expects a value.")
+            opts[arg] = argv[i]
+        elif arg.startswith("--"):
+            usage_error(f'unknown option "{arg}".')
+        else:
+            positional.append(arg)
+        i += 1
+
+    cfg = load_config()
+    verb = positional[0] if positional else None
+    if verb == "spaces":
+        cmd_spaces(cfg, positional, opts, as_json)
+    elif verb == "search":
+        cmd_search(cfg, positional, opts, as_json)
+    elif verb == "get":
+        cmd_get(cfg, positional, opts, as_json)
+    elif verb is None:
+        usage_error()
+    else:
+        usage_error(f'unknown verb "{verb}" — use "spaces", "search", or "get".')
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except CbError as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
