@@ -12,6 +12,8 @@ Implement via the worker subagent: $@
 3. On return: inspect the diff yourself. Run build and tests. Fix nits
    directly; send anything larger back to the worker with specifics, or to
    the `reviewer` subagent for a verdict.
-4. Commit per the repo's conventions (Conventional Commits, tool as scope,
-   `Co-Authored-by: Pi (<provider>/<model>)` trailer) — only after you have
-   seen every line. Never commit unseen worker output.
+4. Commit only after you have seen every line and run the relevant
+   verification. Follow the repo's conventions and `skills/commit/SKILL.md`;
+   the shared skill is canonical for Conventional Commits, human
+   Author/Committer identity, active-runtime attribution, and helper usage.
+   Never commit unseen worker output.
